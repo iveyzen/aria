@@ -56,7 +56,7 @@ const Orb = (() => {
     coral: makeSprite(8, 78, 55),
     vermilion: makeSprite(14, 74, 43),
     peach: makeSprite(26, 92, 68),
-    ash: makeSprite(28, 10, 56) // 离线暖灰
+    ash: makeSprite(28, 12, 46) // 离线暖灰：压深一点才看得清
   }
 
   function pickTint(r) {
@@ -126,7 +126,7 @@ const Orb = (() => {
               ? { vis: 0.8, energy: 0.6, tighten: 0.2, warm: 1 }
               : state === 'idle'
                 ? { vis: 1, energy: 0.15, tighten: 0, warm: 1 }
-                : { vis: 0.35, energy: 0.05, tighten: 0, warm: 0 }
+                : { vis: 0.68, energy: 0.07, tighten: 0, warm: 0 }
     const k = Math.min(1, dt * 2.6)
     vis += (target.vis - vis) * k
     energy += (target.energy - energy) * k
@@ -162,14 +162,17 @@ const Orb = (() => {
 
     const contract = 1 - tighten * 0.1 - pulseE * 0.05 // 聆听/吸气时轻轻收拢
 
-    // 尘环体量：粒子下面垫一圈柔光环带，给星云"密度"
-    if (warm > 0.02) {
+    // 尘环体量：粒子下面垫一圈柔光环带，给星云"密度"（离线时用暖灰）
+    {
       const bandR = R * breath * contract
+      const bandA = (0.1 + push * 0.08 + energy * 0.03) * vis * pulse
+      const h = warm > 0.5 ? 10 : 30
+      const s = 75 * warm + 10 * (1 - warm)
+      const l = 55 * warm + 48 * (1 - warm)
       const band = ctx.createRadialGradient(0, 0, bandR * 0.55, 0, 0, bandR * 1.45)
-      const bandA = (0.1 + push * 0.08 + energy * 0.03) * vis * pulse * warm
-      band.addColorStop(0, 'hsla(10, 75%, 55%, 0)')
-      band.addColorStop(0.5, `hsla(10, 75%, 55%, ${bandA})`)
-      band.addColorStop(1, 'hsla(10, 75%, 55%, 0)')
+      band.addColorStop(0, `hsla(${h}, ${s}%, ${l}%, 0)`)
+      band.addColorStop(0.5, `hsla(${h}, ${s}%, ${l}%, ${bandA})`)
+      band.addColorStop(1, `hsla(${h}, ${s}%, ${l}%, 0)`)
       ctx.beginPath()
       ctx.arc(0, 0, bandR * 1.45, 0, Math.PI * 2)
       ctx.fillStyle = band
@@ -196,7 +199,7 @@ const Orb = (() => {
         ctx.drawImage(p.tint, x - size / 2, y - size / 2, size, size)
       }
       if (warm < 0.98) {
-        ctx.globalAlpha = a * (1 - warm) * 0.8
+        ctx.globalAlpha = a * (1 - warm)
         ctx.drawImage(SPRITES.ash, x - size / 2, y - size / 2, size, size)
       }
     }

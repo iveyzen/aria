@@ -1,7 +1,15 @@
 import { EventEmitter } from 'events'
 import WebSocket from 'ws'
 import { AriaConfig } from './config'
-import { ARIA_INSTRUCTIONS, ARIA_TOOLS, GREETING_PROMPT, JUDGE_PROMPT, speakJudged } from './persona'
+import {
+  ARIA_INSTRUCTIONS,
+  ARIA_TOOLS,
+  GREETING_PROMPT,
+  JUDGE_PROMPT,
+  NOTE_PROMPT,
+  replyJudgePrompt,
+  speakJudged
+} from './persona'
 
 /**
  * gpt-realtime-2.1 的 WebSocket 客户端。
@@ -23,7 +31,10 @@ export class RealtimeClient extends EventEmitter {
   private userSpeaking = false
   private closedByUs = false
   private greeted = false
-  private judgePending = false
+  /** 正在等待的无声文本响应类型：judge=判断要不要说话 note=观影笔记 */
+  private pendingKind: 'judge' | 'note' | null = null
+  /** 门控听音：用户说话后先无声判断"是不是对我说的"再决定回不回 */
+  private gated = false
 
   /** extraContext：连接时刻的动态上下文（时间、长期记忆），拼在人设后面 */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
@@ -82,11 +93,45 @@ export class RealtimeClient extends EventEmitter {
    * 输出 PASS 就当无事发生；写了台词就再让她真的说出来。
    */
   requestJudgment(): void {
-    if (!this.isOpen || this.responseActive || this.userSpeaking) return
-    this.judgePending = true
+    this.silentResponse('judge', JUDGE_PROMPT)
+  }
+
+  /** 无声观影笔记：文字留在对话里，就是她对视频内容的短时记忆 */
+  requestNote(): void {
+    this.silentResponse('note', NOTE_PROMPT)
+  }
+
+  /**
+   * 门控听音开关。开启后用户语音不再直接触发回应，
+   * 而是转写完成后先无声判断"是不是对我说的"，是才开口。
+   */
+  setGatedListening(on: boolean): void {
+    this.gated = on
+    if (!this.isOpen) return
+    this.send({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        audio: {
+          input: {
+            turn_detection: {
+              type: 'semantic_vad',
+              eagerness: 'low',
+              create_response: !on,
+              interrupt_response: true
+            }
+          }
+        }
+      }
+    })
+  }
+
+  private silentResponse(kind: 'judge' | 'note', instructions: string): void {
+    if (!this.isOpen || this.responseActive || this.userSpeaking || this.pendingKind) return
+    this.pendingKind = kind
     this.send({
       type: 'response.create',
-      response: { output_modalities: ['text'], instructions: JUDGE_PROMPT }
+      response: { output_modalities: ['text'], instructions }
     })
   }
 
@@ -183,9 +228,21 @@ export class RealtimeClient extends EventEmitter {
         this.emit('speechStopped')
         break
 
-      case 'conversation.item.input_audio_transcription.completed':
-        if (ev.transcript) this.emit('userTranscript', String(ev.transcript).trim())
+      case 'conversation.item.input_audio_transcription.completed': {
+        const heard = ev.transcript ? String(ev.transcript).trim() : ''
+        if (heard) {
+          this.emit('userTranscript', heard)
+          // 门控模式：先无声判断这段话是不是对她说的
+          if (this.gated && !this.responseActive && !this.pendingKind) {
+            this.pendingKind = 'judge'
+            this.send({
+              type: 'response.create',
+              response: { output_modalities: ['text'], instructions: replyJudgePrompt(heard) }
+            })
+          }
+        }
         break
+      }
 
       case 'conversation.item.added':
       case 'conversation.item.created': {
@@ -222,12 +279,16 @@ export class RealtimeClient extends EventEmitter {
       case 'response.done': {
         this.responseActive = false
         this.emit('responseState', false)
-        if (this.judgePending) {
-          this.judgePending = false
-          const line = this.extractText(ev.response)
-          if (line && !/^pass\b/i.test(line) && !this.userSpeaking) {
-            this.send({ type: 'response.create', response: { instructions: speakJudged(line) } })
+        if (this.pendingKind) {
+          const kind = this.pendingKind
+          this.pendingKind = null
+          if (kind === 'judge') {
+            const line = this.extractText(ev.response)
+            if (line && !/^pass\b/i.test(line) && !this.userSpeaking) {
+              this.send({ type: 'response.create', response: { instructions: speakJudged(line) } })
+            }
           }
+          // note：笔记文字留在对话里即达成目的，无需其他动作
         }
         break
       }

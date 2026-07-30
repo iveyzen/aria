@@ -26,6 +26,7 @@ let captureTimer: ReturnType<typeof setInterval> | null = null
 let judgeTimer: ReturnType<typeof setInterval> | null = null
 let lastImageAt = 0
 let lastProactiveAt = 0
+let cowatchFrames = 0
 
 function ui(channel: string, payload?: unknown): void {
   win?.webContents.send('ui', { channel, payload })
@@ -74,6 +75,7 @@ function setCowatch(on: boolean): void {
   }
   if (on) {
     watchEnabled = true
+    cowatchFrames = 0
     client?.sendSystemNote(COWATCH_ON_NOTE)
     judgeTimer = setInterval(() => {
       if (cowatch) client?.requestJudgment()
@@ -81,6 +83,7 @@ function setCowatch(on: boolean): void {
   } else {
     client?.sendSystemNote(COWATCH_OFF_NOTE)
   }
+  client?.setGatedListening(on) // 共看时视频人声多，先判断再回
   if (client?.isOpen && watchEnabled) startWatching()
 }
 
@@ -123,6 +126,12 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   }
   client.sendImage(frame.dataUrl, prompt)
   ui('looked') // 圆环"吸一口气"：她刚看了一眼
+
+  // 共看模式：每 3 帧默默记一次观影笔记（截图会被修剪，笔记文字长存）
+  if (cowatch) {
+    cowatchFrames++
+    if (cowatchFrames % 3 === 0) client.requestNote()
+  }
 }
 
 function connect(): void {

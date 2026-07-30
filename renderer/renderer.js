@@ -164,6 +164,8 @@ function setState(state) {
   if (connected) {
     Sfx.on()
     flashStatus(watchingName ? `在线 · 看着 ${watchingName}` : '在线')
+    // 上线第一件事：让用户挑一个屏幕/窗口给她看
+    if (!wasConnected && !watchingName) setTimeout(() => void openPicker(), 700)
   } else if (connecting) {
     flashStatus('连接中', 20000)
   } else if (wasConnected) {
@@ -275,6 +277,7 @@ async function openPicker() {
   Sfx.tap()
   const sources = await window.aria.getSources()
   els.pickerList.innerHTML = ''
+  let cardIndex = 0
   const addSection = (title, items) => {
     if (!items.length) return
     const head = document.createElement('div')
@@ -287,6 +290,7 @@ async function openPicker() {
     for (const s of items) {
       const card = document.createElement('button')
       card.className = 'card' + (s.id === watchingId ? ' cur' : '')
+      card.style.animationDelay = `${cardIndex++ * 45}ms` // 依次浮现
       const img = document.createElement('img')
       img.src = s.thumbnail
       const name = document.createElement('span')
