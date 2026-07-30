@@ -16,7 +16,7 @@
 const Orb = (() => {
   const SIZE = 300
   const R = 76 // 尘环基准半径
-  const COUNT = 200
+  const COUNT = 240
 
   let canvas = null
   let ctx = null
@@ -78,7 +78,7 @@ const Orb = (() => {
       oscA: 2 + Math.random() * 5, // 径向漂移幅度
       oscF: 0.25 + Math.random() * 0.5,
       twF: 0.5 + Math.random() * 1.1, // 明暗闪烁频率
-      baseA: 0.38 + Math.random() * 0.55
+      baseA: 0.5 + Math.random() * 0.5
     }
   })
 
@@ -160,9 +160,24 @@ const Orb = (() => {
     ctx.fillStyle = core
     ctx.fill()
 
+    const contract = 1 - tighten * 0.1 - pulseE * 0.05 // 聆听/吸气时轻轻收拢
+
+    // 尘环体量：粒子下面垫一圈柔光环带，给星云"密度"
+    if (warm > 0.02) {
+      const bandR = R * breath * contract
+      const band = ctx.createRadialGradient(0, 0, bandR * 0.55, 0, 0, bandR * 1.45)
+      const bandA = (0.1 + push * 0.08 + energy * 0.03) * vis * pulse * warm
+      band.addColorStop(0, 'hsla(10, 75%, 55%, 0)')
+      band.addColorStop(0.5, `hsla(10, 75%, 55%, ${bandA})`)
+      band.addColorStop(1, 'hsla(10, 75%, 55%, 0)')
+      ctx.beginPath()
+      ctx.arc(0, 0, bandR * 1.45, 0, Math.PI * 2)
+      ctx.fillStyle = band
+      ctx.fill()
+    }
+
     // 尘环粒子
     const speedMul = 0.35 + energy * 2.3
-    const contract = 1 - tighten * 0.1 - pulseE * 0.05 // 吸气：轻轻收一下
     for (const p of PARTICLES) {
       p.ang += p.sp * speedMul * frameDt
       const r =
@@ -170,7 +185,7 @@ const Orb = (() => {
         push * 16 * (0.3 + p.z)
       const x = Math.cos(p.ang) * r
       const y = Math.sin(p.ang) * r
-      const size = (2.6 + p.z * 11) * (1 + push * 0.3)
+      const size = (3.0 + p.z * 12) * (1 + push * 0.3)
       const tw = 0.62 + 0.38 * Math.sin(t * p.twF + p.ph)
       const a =
         p.baseA * (0.92 - p.z * 0.42) * vis * tw * (0.8 + energy * 0.5) * pulse

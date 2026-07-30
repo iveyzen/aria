@@ -6,6 +6,7 @@ const els = {
   ariaLine: $('aria-line'),
   micBtn: $('mic-btn'),
   watchBtn: $('watch-btn'),
+  cowatchBtn: $('cowatch-btn'),
   lookBtn: $('look-btn'),
   settingsBtn: $('settings-btn'),
   minBtn: $('min-btn'),
@@ -29,6 +30,7 @@ const els = {
 let connected = false
 let connecting = false
 let micEnabled = true
+let cowatchOn = false
 let watchingName = null
 let watchingId = null
 let userSpeaking = false
@@ -167,6 +169,8 @@ function setState(state) {
   } else if (wasConnected) {
     Sfx.off()
     flashStatus('已断开')
+    cowatchOn = false
+    els.cowatchBtn.classList.remove('active')
   }
   if (!connected && !connecting) {
     els.lookBtn.classList.add('disabled')
@@ -243,6 +247,18 @@ els.micBtn.addEventListener('click', () => {
 })
 
 els.watchBtn.addEventListener('click', () => void openPicker())
+
+els.cowatchBtn.addEventListener('click', () => {
+  Sfx.tap()
+  if (!connected) {
+    flashStatus('先点圆环连接')
+    return
+  }
+  cowatchOn = !cowatchOn
+  els.cowatchBtn.classList.toggle('active', cowatchOn)
+  window.aria.setCowatch(cowatchOn)
+  flashStatus(cowatchOn ? '共看模式 · 一起看' : '退出共看模式')
+})
 
 els.lookBtn.addEventListener('click', () => {
   Sfx.tap()

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import WebSocket from 'ws'
 import { AriaConfig } from './config'
-import { ARIA_INSTRUCTIONS, ARIA_TOOLS, GREETING_PROMPT } from './persona'
+import { ARIA_INSTRUCTIONS, ARIA_TOOLS, GREETING_PROMPT, JUDGE_PROMPT, speakJudged } from './persona'
 
 /**
  * gpt-realtime-2.1 的 WebSocket 客户端。
@@ -23,6 +23,7 @@ export class RealtimeClient extends EventEmitter {
   private userSpeaking = false
   private closedByUs = false
   private greeted = false
+  private judgePending = false
 
   /** extraContext：连接时刻的动态上下文（时间、长期记忆），拼在人设后面 */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
@@ -65,6 +66,28 @@ export class RealtimeClient extends EventEmitter {
   appendAudio(pcm16: Buffer): void {
     if (!this.isOpen) return
     this.send({ type: 'input_audio_buffer.append', audio: pcm16.toString('base64') })
+  }
+
+  /** 注入一条系统提示（模式切换等），不触发响应 */
+  sendSystemNote(text: string): void {
+    if (!this.isOpen) return
+    this.send({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] }
+    })
+  }
+
+  /**
+   * 共看模式的无声判断：让她用纯文本（便宜、无声）决定要不要吐槽。
+   * 输出 PASS 就当无事发生；写了台词就再让她真的说出来。
+   */
+  requestJudgment(): void {
+    if (!this.isOpen || this.responseActive || this.userSpeaking) return
+    this.judgePending = true
+    this.send({
+      type: 'response.create',
+      response: { output_modalities: ['text'], instructions: JUDGE_PROMPT }
+    })
   }
 
   /** 回传工具执行结果，并让 Aria 接着说 */
@@ -196,10 +219,18 @@ export class RealtimeClient extends EventEmitter {
         break
       }
 
-      case 'response.done':
+      case 'response.done': {
         this.responseActive = false
         this.emit('responseState', false)
+        if (this.judgePending) {
+          this.judgePending = false
+          const line = this.extractText(ev.response)
+          if (line && !/^pass\b/i.test(line) && !this.userSpeaking) {
+            this.send({ type: 'response.create', response: { instructions: speakJudged(line) } })
+          }
+        }
         break
+      }
 
       case 'response.output_audio.delta':
       case 'response.audio.delta':
@@ -218,11 +249,27 @@ export class RealtimeClient extends EventEmitter {
 
       case 'error': {
         const msg: string = ev.error?.message ?? JSON.stringify(ev.error ?? ev)
-        // 响应刚自然结束时 response.cancel 会报"无活跃响应"，是正常竞态
-        if (!/no active response|cancellation failed/i.test(msg)) this.emit('apiError', msg)
+        // "无活跃响应可取消"和"已有活跃响应"都是正常竞态，不打扰用户
+        if (!/no active response|cancellation failed|already has an active response/i.test(msg)) {
+          this.emit('apiError', msg)
+        }
         break
       }
     }
+  }
+
+  /** 从 response.done 的响应对象里抽出纯文本输出（无声判断用） */
+  private extractText(resp: any): string {
+    if (!Array.isArray(resp?.output)) return ''
+    let text = ''
+    for (const item of resp.output) {
+      if (item?.type === 'message' && Array.isArray(item.content)) {
+        for (const c of item.content) {
+          if (typeof c?.text === 'string') text += c.text
+        }
+      }
+    }
+    return text.trim()
   }
 
   /** 只保留最近 N 张截图，更早的从会话里删掉，避免图像 token 累积 */

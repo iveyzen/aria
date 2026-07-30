@@ -23,6 +23,10 @@ export interface AriaConfig {
   alwaysOnTop: boolean
   /** 圆环下方是否显示 Aria 说话的字幕 */
   showCaptions: boolean
+  /** 共看模式：固定看帧间隔 (ms) */
+  cowatchIntervalMs: number
+  /** 共看模式：无声判断（要不要吐槽）的间隔 (ms) */
+  cowatchJudgeIntervalMs: number
 }
 
 export const DEFAULT_CONFIG: AriaConfig = {
@@ -38,7 +42,9 @@ export const DEFAULT_CONFIG: AriaConfig = {
   proactiveCooldownMs: 90_000,
   proactiveDiffThreshold: 0.18,
   alwaysOnTop: true,
-  showCaptions: true
+  showCaptions: true,
+  cowatchIntervalMs: 12_000,
+  cowatchJudgeIntervalMs: 150_000
 }
 
 function configPath(): string {

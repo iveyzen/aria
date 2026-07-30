@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('aria', {
   getSources: () => ipcRenderer.invoke('get-sources'),
   setTarget: (target: unknown) => ipcRenderer.send('set-target', target),
   setWatch: (on: boolean) => ipcRenderer.send('set-watch', on),
+  setCowatch: (on: boolean) => ipcRenderer.send('set-cowatch', on),
   lookNow: () => ipcRenderer.send('look-now'),
   winMin: () => ipcRenderer.send('win-min'),
   winClose: () => ipcRenderer.send('win-close'),

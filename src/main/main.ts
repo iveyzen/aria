@@ -2,7 +2,13 @@ import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
 import { AriaConfig, loadConfig, saveConfig } from './config'
 import { appendMemory, loadMemory } from './memory'
-import { LOOK_PROMPT, PROACTIVE_PROMPT, sessionContext } from './persona'
+import {
+  COWATCH_OFF_NOTE,
+  COWATCH_ON_NOTE,
+  LOOK_PROMPT,
+  PROACTIVE_PROMPT,
+  sessionContext
+} from './persona'
 import { RealtimeClient } from './realtime'
 import { CaptureTarget, ScreenWatcher } from './screen'
 import { searchWeb } from './websearch'
@@ -15,7 +21,9 @@ let cfg: AriaConfig
 const watcher = new ScreenWatcher()
 
 let watchEnabled = true
+let cowatch = false
 let captureTimer: ReturnType<typeof setInterval> | null = null
+let judgeTimer: ReturnType<typeof setInterval> | null = null
 let lastImageAt = 0
 let lastProactiveAt = 0
 
@@ -45,7 +53,9 @@ function createWindow(): void {
 
 function startWatching(): void {
   stopWatching()
-  captureTimer = setInterval(() => void captureAndMaybeSend(false), cfg.captureIntervalMs)
+  // 共看模式：固定节奏看帧（视频画面永远在变，帧差检测没有意义）
+  const interval = cowatch ? cfg.cowatchIntervalMs : cfg.captureIntervalMs
+  captureTimer = setInterval(() => void captureAndMaybeSend(cowatch), interval)
 }
 
 function stopWatching(): void {
@@ -53,6 +63,25 @@ function stopWatching(): void {
     clearInterval(captureTimer)
     captureTimer = null
   }
+}
+
+function setCowatch(on: boolean): void {
+  if (cowatch === on) return
+  cowatch = on
+  if (judgeTimer) {
+    clearInterval(judgeTimer)
+    judgeTimer = null
+  }
+  if (on) {
+    watchEnabled = true
+    client?.sendSystemNote(COWATCH_ON_NOTE)
+    judgeTimer = setInterval(() => {
+      if (cowatch) client?.requestJudgment()
+    }, cfg.cowatchJudgeIntervalMs)
+  } else {
+    client?.sendSystemNote(COWATCH_OFF_NOTE)
+  }
+  if (client?.isOpen && watchEnabled) startWatching()
 }
 
 /**
@@ -82,6 +111,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   let prompt = respondPrompt
   if (
     !prompt &&
+    !cowatch && // 共看模式有自己的"无声判断"节奏，不走主动吐槽
     cfg.proactive &&
     frame.diff >= cfg.proactiveDiffThreshold &&
     now - lastProactiveAt >= cfg.proactiveCooldownMs &&
@@ -120,6 +150,11 @@ function connect(): void {
   })
   client.on('close', ({ code, intentional }: { code: number; intentional: boolean }) => {
     stopWatching()
+    cowatch = false
+    if (judgeTimer) {
+      clearInterval(judgeTimer)
+      judgeTimer = null
+    }
     ui('state', 'disconnected')
     ui('status', intentional ? '已断开' : `连接断开 (${code})，点"连接"重试`)
     client = null
@@ -189,6 +224,7 @@ app.whenReady().then(() => {
     }
   })
   ipcMain.on('look-now', () => void captureAndMaybeSend(true, LOOK_PROMPT))
+  ipcMain.on('set-cowatch', (_e, on: boolean) => setCowatch(on))
 
   ipcMain.on('win-min', () => win?.minimize())
   ipcMain.on('win-close', () => win?.close())
