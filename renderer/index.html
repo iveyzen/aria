@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>Aria</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="win-controls">
+    <button id="min-btn" class="wbtn" title="最小化">─</button>
+    <button id="close-btn" class="wbtn close" title="关闭">✕</button>
+  </div>
+
+  <main>
+    <canvas id="orb" title="点击：连接 / 断开"></canvas>
+    <div id="status">离线</div>
+    <div id="aria-line"></div>
+  </main>
+
+  <footer class="dock">
+    <button id="mic-btn" class="dock-btn" title="麦克风">
+      <svg viewBox="0 0 24 24">
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5 11a7 7 0 0 0 14 0" />
+        <line x1="12" y1="18" x2="12" y2="21" />
+        <line class="slash" x1="4" y1="4" x2="20" y2="20" />
+      </svg>
+    </button>
+    <button id="watch-btn" class="dock-btn" title="感知：选择她看的屏幕或窗口">
+      <svg viewBox="0 0 24 24">
+        <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+        <circle cx="12" cy="12" r="2.6" />
+      </svg>
+    </button>
+    <button id="look-btn" class="dock-btn" title="让她看一眼，聊聊画面">
+      <svg viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3.4" />
+        <line x1="12" y1="3" x2="12" y2="5.8" />
+        <line x1="12" y1="18.2" x2="12" y2="21" />
+        <line x1="3" y1="12" x2="5.8" y2="12" />
+        <line x1="18.2" y1="12" x2="21" y2="12" />
+        <line x1="5.6" y1="5.6" x2="7.4" y2="7.4" />
+        <line x1="16.6" y1="16.6" x2="18.4" y2="18.4" />
+        <line x1="18.4" y1="5.6" x2="16.6" y2="7.4" />
+        <line x1="5.6" y1="18.4" x2="7.4" y2="16.6" />
+      </svg>
+    </button>
+    <button id="settings-btn" class="dock-btn" title="设置">
+      <svg viewBox="0 0 24 24">
+        <line x1="4" y1="7" x2="20" y2="7" />
+        <circle class="knob" cx="10" cy="7" r="2.2" />
+        <line x1="4" y1="12" x2="20" y2="12" />
+        <circle class="knob" cx="15" cy="12" r="2.2" />
+        <line x1="4" y1="17" x2="20" y2="17" />
+        <circle class="knob" cx="7.5" cy="17" r="2.2" />
+      </svg>
+    </button>
+  </footer>
+
+  <div id="picker" class="overlay hidden">
+    <h2>她看哪里</h2>
+    <div id="picker-list"></div>
+    <div class="overlay-actions">
+      <button id="picker-off" class="txt-btn muted">停止感知</button>
+      <button id="picker-close" class="txt-btn">取消</button>
+    </div>
+  </div>
+
+  <div id="settings" class="overlay hidden">
+    <h2>设置</h2>
+
+    <section>
+      <div class="sec-label">连接</div>
+      <input id="cfg-apikey" type="password" placeholder="OpenAI API Key（sk-…）"
+             autocomplete="off" spellcheck="false" />
+    </section>
+
+    <section>
+      <div class="sec-label">她的声音</div>
+      <div id="voice-grid">
+        <button class="voice" data-voice="marin">marin</button>
+        <button class="voice" data-voice="cedar">cedar</button>
+        <button class="voice" data-voice="coral">coral</button>
+        <button class="voice" data-voice="sage">sage</button>
+        <button class="voice" data-voice="shimmer">shimmer</button>
+        <button class="voice" data-voice="alloy">alloy</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-label">感知</div>
+      <div class="slider-row">
+        <span>截图间隔</span>
+        <input id="cfg-interval" type="range" min="1" max="20" step="1" />
+        <output id="interval-out">5s</output>
+      </div>
+      <label class="switch-row">
+        <span>看到大场面时主动吐槽</span>
+        <span class="switch"><input id="cfg-proactive" type="checkbox" /><i></i></span>
+      </label>
+    </section>
+
+    <section>
+      <div class="sec-label">界面</div>
+      <label class="switch-row">
+        <span>显示她说话的字幕</span>
+        <span class="switch"><input id="cfg-captions" type="checkbox" /><i></i></span>
+      </label>
+      <label class="switch-row">
+        <span>窗口置顶</span>
+        <span class="switch"><input id="cfg-ontop" type="checkbox" /><i></i></span>
+      </label>
+    </section>
+
+    <div class="overlay-actions">
+      <button id="cfg-save" class="txt-btn accent">保存</button>
+      <button id="cfg-close" class="txt-btn">关闭</button>
+    </div>
+  </div>
+
+  <script src="sounds.js"></script>
+  <script src="orb.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

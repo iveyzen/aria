@@ -1,0 +1,429 @@
+/* 暖色 Scandinavian：奶白底、赤陶橙点缀、克制、留白。
+   整个窗口可拖动；交互元素各自 no-drag。 */
+:root {
+  --bg: #f7f2ea;
+  --panel: #fffdf9;
+  --line: #e7ddcf;
+  --text: #4a4238;
+  --muted: #a89c8c;
+  --faint: #c9bda9;
+  --accent: #e0704f;
+  --accent-soft: #f2a07b;
+  --accent-deep: #c85a3d;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  font-weight: 350;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+button,
+input,
+select,
+canvas,
+.overlay {
+  -webkit-app-region: no-drag;
+}
+
+/* ---------- 窗口控制（悬停才现身） ---------- */
+.win-controls {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.25s;
+  z-index: 10;
+}
+body:hover .win-controls {
+  opacity: 1;
+}
+.wbtn {
+  background: none;
+  border: none;
+  color: var(--faint);
+  width: 30px;
+  height: 26px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 7px;
+  transition: color 0.15s, background 0.15s;
+}
+.wbtn:hover { background: #00000009; color: var(--text); }
+.wbtn.close:hover { background: #e0704f22; color: var(--accent-deep); }
+
+/* ---------- 主区域：圆环即一切 ---------- */
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+  padding: 0 26px;
+}
+
+#orb {
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+#orb:active {
+  transform: scale(0.97);
+}
+
+#status {
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  color: var(--muted);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: -16px;
+  opacity: 1;
+  transition: opacity 1s ease;
+}
+#status.faded {
+  opacity: 0;
+}
+
+#aria-line {
+  min-height: 66px;
+  max-width: 300px;
+  margin-top: 14px;
+  text-align: center;
+  line-height: 1.75;
+  font-size: 13.5px;
+  color: #6d6154;
+  user-select: text;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  opacity: 1;
+  transition: opacity 1.2s ease;
+}
+#aria-line.faded {
+  opacity: 0;
+}
+
+/* ---------- 底部 dock（悬停浮现） ---------- */
+.dock {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0 16px;
+  opacity: 0.22;
+  transition: opacity 0.3s;
+  flex: 0 0 auto;
+}
+body:hover .dock {
+  opacity: 1;
+}
+
+.dock-btn {
+  background: none;
+  border: none;
+  width: 40px;
+  height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  transition: color 0.18s, background 0.18s;
+}
+.dock-btn:hover {
+  color: var(--accent-deep);
+  background: #e0704f14;
+}
+.dock-btn.active {
+  color: var(--accent);
+}
+.dock-btn.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.dock-btn svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.dock-btn .slash {
+  display: none;
+}
+.dock-btn.muted .slash {
+  display: block;
+}
+.dock-btn.muted {
+  color: var(--accent-deep);
+}
+.dock-btn .knob {
+  fill: var(--bg);
+}
+
+/* ---------- 浮层 ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: #f7f2eaea;
+  backdrop-filter: blur(16px);
+  padding: 30px 34px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  animation: fade 0.2s ease-out;
+  z-index: 20;
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.overlay h2 {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.4em;
+  color: var(--accent-deep);
+  text-align: center;
+}
+.overlay-actions {
+  display: flex;
+  justify-content: center;
+  gap: 26px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+.txt-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  cursor: pointer;
+  padding: 8px 6px;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.txt-btn:hover { border-color: var(--accent-soft); }
+.txt-btn.accent { color: var(--accent-deep); font-weight: 500; }
+.txt-btn.muted { color: var(--muted); }
+.txt-btn.muted:hover { color: var(--accent-deep); }
+
+/* ---------- 设置 ---------- */
+#settings section {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+#settings section:last-of-type {
+  border-bottom: none;
+}
+.sec-label {
+  font-size: 10.5px;
+  letter-spacing: 0.32em;
+  color: var(--faint);
+}
+
+#settings input[type="password"] {
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--text);
+  padding: 8px 2px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  outline: none;
+  transition: border-color 0.25s, box-shadow 0.5s;
+}
+#settings input[type="password"]:focus {
+  border-color: var(--accent-soft);
+}
+input.pulse {
+  animation: keyglow 0.55s ease-out;
+}
+@keyframes keyglow {
+  0% { box-shadow: 0 12px 14px -12px #e0704f00; }
+  30% { box-shadow: 0 14px 20px -10px #e0704f88; border-color: var(--accent); }
+  100% { box-shadow: 0 12px 10px -12px #e0704f22; }
+}
+
+#voice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.voice {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  padding: 7px 0;
+  cursor: pointer;
+  transition: all 0.16s;
+}
+.voice:hover { border-color: var(--accent-soft); color: var(--text); }
+.voice.sel {
+  background: linear-gradient(120deg, var(--accent), var(--accent-deep));
+  border-color: transparent;
+  color: #fff8f2;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.slider-row span { flex: 0 0 auto; }
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 3px;
+}
+.slider-row output {
+  flex: 0 0 30px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  cursor: pointer;
+}
+.switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.switch i {
+  position: absolute;
+  inset: 0;
+  background: var(--line);
+  border-radius: 999px;
+  transition: background 0.2s;
+  pointer-events: none;
+}
+.switch i::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fffdf9;
+  box-shadow: 0 1px 3px #00000022;
+  transition: transform 0.2s ease;
+}
+.switch input:checked + i {
+  background: linear-gradient(120deg, var(--accent), var(--accent-deep));
+}
+.switch input:checked + i::after {
+  transform: translateX(16px);
+}
+
+/* ---------- 感知目标选择器 ---------- */
+.picker-section {
+  font-size: 10.5px;
+  letter-spacing: 0.32em;
+  color: var(--faint);
+  margin: 4px 0 -8px;
+}
+.picker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.card:hover {
+  border-color: var(--accent-soft);
+  box-shadow: 0 4px 18px #e0704f26;
+  transform: translateY(-1px);
+}
+.card img {
+  width: 100%;
+  border-radius: 8px;
+  display: block;
+  background: #eee5d8;
+}
+.card span {
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 2px 2px;
+}
+.card.cur {
+  border-color: var(--accent);
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-thumb {
+  background: #ddd0bd;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: #cbbca6; }
+
+.hidden { display: none !important; }

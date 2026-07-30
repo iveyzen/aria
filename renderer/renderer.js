@@ -1,0 +1,369 @@
+const $ = id => document.getElementById(id)
+
+const els = {
+  orb: $('orb'),
+  status: $('status'),
+  ariaLine: $('aria-line'),
+  micBtn: $('mic-btn'),
+  watchBtn: $('watch-btn'),
+  lookBtn: $('look-btn'),
+  settingsBtn: $('settings-btn'),
+  minBtn: $('min-btn'),
+  closeBtn: $('close-btn'),
+  picker: $('picker'),
+  pickerList: $('picker-list'),
+  pickerOff: $('picker-off'),
+  pickerClose: $('picker-close'),
+  settings: $('settings'),
+  cfgApiKey: $('cfg-apikey'),
+  voiceGrid: $('voice-grid'),
+  cfgInterval: $('cfg-interval'),
+  intervalOut: $('interval-out'),
+  cfgProactive: $('cfg-proactive'),
+  cfgCaptions: $('cfg-captions'),
+  cfgOnTop: $('cfg-ontop'),
+  cfgSave: $('cfg-save'),
+  cfgClose: $('cfg-close')
+}
+
+let connected = false
+let connecting = false
+let micEnabled = true
+let watchingName = null
+let watchingId = null
+let userSpeaking = false
+let ariaSpeaking = false
+let showCaptions = true
+let audioReady = false
+let audioLive = false // 扬声器里当下是否真的有她的声音
+let playerNode = null
+let selectedVoice = 'marin'
+let statusTimer = null
+let lineTimer = null
+
+Orb.init(els.orb)
+void window.aria.getConfig().then(cfg => {
+  showCaptions = cfg.showCaptions !== false
+})
+flashStatus('点击圆环连接', 6000)
+
+/* ---------- 状态文字：只闪现，不常驻——圆环本身就是状态 ---------- */
+
+function flashStatus(msg, dur = 3500) {
+  els.status.textContent = msg
+  els.status.classList.remove('faded')
+  if (statusTimer) clearTimeout(statusTimer)
+  statusTimer = setTimeout(() => els.status.classList.add('faded'), dur)
+}
+
+function refreshOrb() {
+  Orb.setState(
+    !connected
+      ? connecting
+        ? 'connecting'
+        : 'disconnected'
+      : ariaSpeaking
+        ? audioLive
+          ? 'speaking'
+          : 'thinking' // 响应已开始但还没出声：在组织语言/查资料
+        : userSpeaking
+          ? 'listening'
+          : 'idle'
+  )
+}
+
+/* ---------- 音频管线 ---------- */
+
+async function ensureAudio() {
+  if (audioReady) return
+
+  // 播放：Aria 的声音（PCM16 24kHz 流式）
+  const outCtx = new AudioContext({ sampleRate: 24000 })
+  await outCtx.audioWorklet.addModule('worklets/player-worklet.js')
+  playerNode = new AudioWorkletNode(outCtx, 'player', { outputChannelCount: [1] })
+  playerNode.connect(outCtx.destination)
+  playerNode.port.onmessage = e => {
+    if (e.data.type !== 'level') return
+    Orb.setLevel(e.data.playing ? e.data.level : 0)
+    if (e.data.playing !== audioLive) {
+      audioLive = e.data.playing
+      refreshOrb() // thinking ↔ speaking 切换
+    }
+  }
+
+  // 采集：麦克风 → PCM16 24kHz → 主进程
+  const inCtx = new AudioContext({ sampleRate: 24000 })
+  await inCtx.audioWorklet.addModule('worklets/mic-worklet.js')
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true, // 关键：不然 Aria 会听见自己说话
+      noiseSuppression: true,
+      autoGainControl: true
+    }
+  })
+  const source = inCtx.createMediaStreamSource(stream)
+  const micNode = new AudioWorkletNode(inCtx, 'mic')
+  source.connect(micNode)
+  micNode.connect(inCtx.destination) // worklet 输出静音，接上只为驱动图
+  micNode.port.onmessage = e => {
+    if (!connected || !micEnabled) return
+    const f32 = e.data
+    const i16 = new Int16Array(f32.length)
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]))
+      i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    window.aria.sendAudio(new Uint8Array(i16.buffer))
+  }
+
+  audioReady = true
+}
+
+window.aria.onAudio(chunk => {
+  if (!playerNode) return
+  const bytes = new Uint8Array(chunk).slice() // 拷贝以保证 2 字节对齐
+  const i16 = new Int16Array(bytes.buffer, 0, bytes.byteLength >> 1)
+  const f32 = new Float32Array(i16.length)
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768
+  playerNode.port.postMessage({ type: 'chunk', data: f32 }, [f32.buffer])
+})
+
+window.aria.onAudioClear(() => {
+  playerNode?.port.postMessage({ type: 'clear' })
+})
+
+/* ---------- Aria 的一句话字幕 ---------- */
+
+function ariaLineDelta(delta) {
+  if (!showCaptions) return
+  if (lineTimer) {
+    clearTimeout(lineTimer)
+    lineTimer = null
+  }
+  if (els.ariaLine.classList.contains('faded')) {
+    els.ariaLine.textContent = ''
+    els.ariaLine.classList.remove('faded')
+  }
+  els.ariaLine.textContent += delta
+}
+
+function ariaLineDone() {
+  if (lineTimer) clearTimeout(lineTimer)
+  lineTimer = setTimeout(() => els.ariaLine.classList.add('faded'), 6000)
+}
+
+/* ---------- 主进程消息 ---------- */
+
+function setState(state) {
+  const wasConnected = connected
+  connected = state === 'connected'
+  connecting = state === 'connecting'
+  if (connected) {
+    Sfx.on()
+    flashStatus(watchingName ? `在线 · 看着 ${watchingName}` : '在线')
+  } else if (connecting) {
+    flashStatus('连接中', 20000)
+  } else if (wasConnected) {
+    Sfx.off()
+    flashStatus('已断开')
+  }
+  if (!connected && !connecting) {
+    els.lookBtn.classList.add('disabled')
+  } else {
+    els.lookBtn.classList.remove('disabled')
+  }
+  refreshOrb()
+}
+
+window.aria.onUi(({ channel, payload }) => {
+  switch (channel) {
+    case 'state':
+      setState(payload)
+      break
+    case 'status':
+      flashStatus(payload)
+      if (String(payload).startsWith('API 错误')) Sfx.err()
+      break
+    case 'aria-delta':
+      ariaLineDelta(payload)
+      break
+    case 'aria-done':
+      ariaLineDone()
+      break
+    case 'aria-speaking':
+      ariaSpeaking = !!payload
+      if (!ariaSpeaking) Orb.setLevel(0)
+      refreshOrb()
+      break
+    case 'user-speaking':
+      userSpeaking = !!payload
+      refreshOrb()
+      break
+    case 'user-said':
+      break // 极简界面不展示用户字幕
+    case 'watch-target':
+      watchingName = payload ? payload.name : null
+      if (!payload) watchingId = null
+      els.watchBtn.classList.toggle('active', !!payload)
+      flashStatus(payload ? `看着 ${payload.name}` : '感知已关闭')
+      break
+    case 'looked':
+      Orb.pulse() // 她看了一眼屏幕：轻轻吸一口气
+      break
+  }
+})
+
+/* ---------- 圆环 = 连接开关 ---------- */
+
+els.orb.addEventListener('click', async () => {
+  if (connecting) return
+  Sfx.tap()
+  if (connected) {
+    window.aria.disconnect()
+    return
+  }
+  try {
+    await ensureAudio()
+  } catch (err) {
+    flashStatus(`麦克风初始化失败: ${err.message}`)
+    Sfx.err()
+    return
+  }
+  window.aria.connect()
+})
+
+/* ---------- dock ---------- */
+
+els.micBtn.addEventListener('click', () => {
+  Sfx.tap()
+  micEnabled = !micEnabled
+  els.micBtn.classList.toggle('muted', !micEnabled)
+  flashStatus(micEnabled ? '麦克风开启' : '麦克风静音')
+})
+
+els.watchBtn.addEventListener('click', () => void openPicker())
+
+els.lookBtn.addEventListener('click', () => {
+  Sfx.tap()
+  window.aria.lookNow()
+})
+
+els.settingsBtn.addEventListener('click', () => void openSettings())
+els.minBtn.addEventListener('click', () => window.aria.winMin())
+els.closeBtn.addEventListener('click', () => window.aria.winClose())
+
+/* ---------- 感知目标选择器 ---------- */
+
+async function openPicker() {
+  Sfx.tap()
+  const sources = await window.aria.getSources()
+  els.pickerList.innerHTML = ''
+  const addSection = (title, items) => {
+    if (!items.length) return
+    const head = document.createElement('div')
+    head.className = 'picker-section'
+    head.textContent = title
+    els.pickerList.appendChild(head)
+    const grid = document.createElement('div')
+    grid.className = 'picker-grid'
+    els.pickerList.appendChild(grid)
+    for (const s of items) {
+      const card = document.createElement('button')
+      card.className = 'card' + (s.id === watchingId ? ' cur' : '')
+      const img = document.createElement('img')
+      img.src = s.thumbnail
+      const name = document.createElement('span')
+      name.textContent = s.name
+      card.append(img, name)
+      card.addEventListener('click', () => {
+        Sfx.tap()
+        watchingId = s.id
+        window.aria.setTarget({ kind: s.kind, id: s.id, name: s.name })
+        els.picker.classList.add('hidden')
+      })
+      grid.appendChild(card)
+    }
+  }
+  addSection('屏幕', sources.filter(s => s.kind === 'screen'))
+  addSection('窗口', sources.filter(s => s.kind === 'window'))
+  els.picker.classList.remove('hidden')
+}
+
+els.pickerOff.addEventListener('click', () => {
+  Sfx.tap()
+  window.aria.setWatch(false)
+  watchingName = null
+  watchingId = null
+  els.watchBtn.classList.remove('active')
+  els.picker.classList.add('hidden')
+})
+els.pickerClose.addEventListener('click', () => {
+  Sfx.tap()
+  els.picker.classList.add('hidden')
+})
+
+/* ---------- 设置 ---------- */
+
+function selectVoice(v) {
+  selectedVoice = v
+  for (const btn of els.voiceGrid.querySelectorAll('.voice')) {
+    btn.classList.toggle('sel', btn.dataset.voice === v)
+  }
+}
+
+els.voiceGrid.addEventListener('click', e => {
+  const btn = e.target.closest('.voice')
+  if (!btn) return
+  Sfx.tap()
+  selectVoice(btn.dataset.voice)
+})
+
+async function openSettings() {
+  Sfx.tap()
+  const cfg = await window.aria.getConfig()
+  els.cfgApiKey.value = cfg.apiKey
+  selectVoice(cfg.voice)
+  els.cfgInterval.value = Math.round(cfg.captureIntervalMs / 1000)
+  els.intervalOut.textContent = `${els.cfgInterval.value}s`
+  els.cfgProactive.checked = cfg.proactive
+  els.cfgCaptions.checked = cfg.showCaptions !== false
+  els.cfgOnTop.checked = cfg.alwaysOnTop
+  els.settings.classList.remove('hidden')
+}
+
+els.cfgInterval.addEventListener('input', () => {
+  els.intervalOut.textContent = `${els.cfgInterval.value}s`
+})
+
+// 输入 Key 时：辉光 + 风铃
+els.cfgApiKey.addEventListener('input', () => {
+  Sfx.key()
+  els.cfgApiKey.classList.remove('pulse')
+  void els.cfgApiKey.offsetWidth // 重启动画
+  els.cfgApiKey.classList.add('pulse')
+})
+
+els.cfgClose.addEventListener('click', () => {
+  Sfx.tap()
+  els.settings.classList.add('hidden')
+})
+
+els.cfgSave.addEventListener('click', async () => {
+  const cfg = await window.aria.getConfig()
+  cfg.apiKey = els.cfgApiKey.value.trim()
+  cfg.voice = selectedVoice
+  cfg.captureIntervalMs = Math.max(1, Number(els.cfgInterval.value) || 3) * 1000
+  cfg.proactive = els.cfgProactive.checked
+  cfg.showCaptions = els.cfgCaptions.checked
+  cfg.alwaysOnTop = els.cfgOnTop.checked
+  await window.aria.saveConfig(cfg)
+  showCaptions = cfg.showCaptions
+  if (!showCaptions) {
+    els.ariaLine.textContent = ''
+    els.ariaLine.classList.add('faded')
+  }
+  els.settings.classList.add('hidden')
+  flashStatus('设置已保存')
+  Sfx.on()
+})

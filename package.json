@@ -1,0 +1,20 @@
+{
+  "name": "aria",
+  "version": "0.1.0",
+  "description": "Aria — 会看屏幕、会说话的桌面陪伴 AI（OpenAI gpt-realtime-2.1）",
+  "main": "dist/main/main.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "start": "npm run build && electron ."
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.12",
+    "electron": "^38.0.0",
+    "typescript": "^5.6.0"
+  }
+}
