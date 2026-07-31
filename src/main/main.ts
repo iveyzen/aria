@@ -50,6 +50,11 @@ let unansweredInitiatives = 0
 /** How often to check "is it time to strike up a conversation" */
 const INITIATIVE_TICK_MS = 5_000
 
+/** Unanswered lines stretch the wait — but someone who explicitly chose chatty asked for company */
+function backoffCap(): number {
+  return cfg.proactivity === 'chatty' ? 2 : 4
+}
+
 function ui(channel: string, payload?: unknown): void {
   win?.webContents.send('ui', { channel, payload })
 }
@@ -104,7 +109,7 @@ async function maybeStartSomething(): Promise<void> {
 
   const now = Date.now()
   // Unanswered self-started lines stretch the wait: a friend who got no reply twice stops pushing
-  const idleNeeded = cfg.idleInitiativeMs * Math.min(4, 1 + unansweredInitiatives)
+  const idleNeeded = cfg.idleInitiativeMs * Math.min(backoffCap(), 1 + unansweredInitiatives)
   if (now - lastActivityAt < idleNeeded) return
   if (now - lastProactiveAt < cfg.proactiveCooldownMs) return
 
@@ -205,7 +210,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
     cfg.proactive &&
     frame.diff >= cfg.proactiveDiffThreshold &&
     // Unanswered self-started lines stretch the cooldown too — same back-off as idle initiative
-    now - lastProactiveAt >= cfg.proactiveCooldownMs * Math.min(4, 1 + unansweredInitiatives) &&
+    now - lastProactiveAt >= cfg.proactiveCooldownMs * Math.min(backoffCap(), 1 + unansweredInitiatives) &&
     // A beat of actual quiet first: judging right after her own reply duplicated the reply
     now - lastActivityAt >= 8_000 &&
     !client.isResponding &&
