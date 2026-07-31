@@ -26,9 +26,11 @@ const SECRET_TEXT =
   /\bsk-[a-z0-9]{4,}|api[ _-]?key|secret key|private key|passphrase|\bpassword\b|密码|私钥|助记词|verification code|验证码|一次性密码/i
 
 const SENSITIVE_TITLE = /avanza|nordnet|etrade|schwab|fidelity|binance|coinbase|骨科|诊疗|病历/i
-// Account-shaped signals: balances plus purchasing power / holdings breakdowns, not mere ticker talk
+// Account-shaped signals: balances, purchasing power, or a holdings TABLE (three of the four
+// column markers co-occurring — full-screen captures have no window title to key on, so the
+// text shape is the main line of defense). Mere ticker talk in articles must stay normal.
 const SENSITIVE_TEXT =
-  /(总价值|账户余额|可用于买入|购买力|account value|buying power|total value)[\s\S]{0,80}(kr|\$|€|¥|元)|(诊断|处方|化验单|病历号)|(账号.{0,6}(尾号|末四位))/i
+  /(总价值|账户余额|可用于买入|购买力|account value|buying power|total value)[\s\S]{0,80}(kr|\$|€|¥|元)|\bGAV\b|(股数|市值|盈亏|权重|持仓)([\s\S]{0,80}(股数|市值|盈亏|权重|持仓)){2}|(诊断|处方|化验单|病历号)|(账号.{0,6}(尾号|末四位))/i
 
 const PERSONAL_TITLE = /gmail|outlook|proton ?mail|邮箱|微信|wechat|telegram|whatsapp|messenger|日历|calendar/i
 
