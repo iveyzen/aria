@@ -10,7 +10,7 @@ function fetchHtml(url: string, redirects = 3): Promise<string> {
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.6'
+          'Accept-Language': 'en-US,en;q=0.9'
         }
       },
       res => {
@@ -26,7 +26,7 @@ function fetchHtml(url: string, redirects = 3): Promise<string> {
       }
     )
     req.on('error', reject)
-    req.setTimeout(8000, () => req.destroy(new Error('搜索超时')))
+    req.setTimeout(8000, () => req.destroy(new Error('search timed out')))
   })
 }
 
@@ -55,8 +55,8 @@ export async function searchWeb(query: string): Promise<string> {
       const snippet = strip(m[2])
       if (title) results.push(`${results.length + 1}. ${title} — ${snippet}`)
     }
-    return results.length ? results.join('\n') : '没有找到相关结果'
+    return results.length ? results.join('\n') : 'No results found'
   } catch (err) {
-    return `搜索失败: ${(err as Error).message}`
+    return `Search failed: ${(err as Error).message}`
   }
 }

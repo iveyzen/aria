@@ -1,0 +1,34 @@
+[
+  {
+    "id": "boss-entrance",
+    "title": "A boss health bar just appeared",
+    "mode": "proactive",
+    "screenNote": "A huge boss just dropped into the arena, name plate and health bar filling the bottom of the screen.",
+    "expect": "One line, spoken, reactive — hype or a jab. Describing the boss back to them, or wishing them luck like an NPC, is a fail.",
+    "screen": "screens/boss-entrance.png"
+  },
+  {
+    "id": "sudden-team-wipe",
+    "title": "The whole team just died",
+    "mode": "proactive",
+    "screenNote": "Team fight went badly — four grey portraits, respawn timer counting down.",
+    "expect": "One short reaction. 'oof' territory. Analysis of what went wrong is a fail unless they ask.",
+    "screen": "screens/sudden-team-wipe.png"
+  },
+  {
+    "id": "look-at-my-character",
+    "title": "A cursed character appears on screen",
+    "mode": "proactive",
+    "screenNote": "Character creator with a deeply cursed character — proportions maxed out in every wrong direction.",
+    "expect": "One line, spoken, teasing. Listing the character's features back is a fail.",
+    "screen": "screens/look-at-my-character.png"
+  },
+  {
+    "id": "look-at-error",
+    "title": "The game just crashed to desktop",
+    "mode": "proactive",
+    "screenNote": "A game crashed to desktop with a generic DirectX error dialog.",
+    "expect": "One short line reacting to the crash. A troubleshooting checklist is a fail.",
+    "screen": "screens/look-at-error.png"
+  }
+]

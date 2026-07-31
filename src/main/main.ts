@@ -1,14 +1,8 @@
 import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
-import { AriaConfig, loadConfig, saveConfig } from './config'
+import { AriaConfig, PROACTIVITY_PRESETS, loadConfig, saveConfig } from './config'
 import { appendMemory, loadMemory } from './memory'
-import {
-  COWATCH_OFF_NOTE,
-  COWATCH_ON_NOTE,
-  LOOK_PROMPT,
-  PROACTIVE_PROMPT,
-  sessionContext
-} from './persona'
+import { PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
 import { CaptureTarget, ScreenWatcher } from './screen'
 import { searchWeb } from './websearch'
@@ -21,12 +15,15 @@ let cfg: AriaConfig
 const watcher = new ScreenWatcher()
 
 let watchEnabled = true
-let cowatch = false
 let captureTimer: ReturnType<typeof setInterval> | null = null
-let judgeTimer: ReturnType<typeof setInterval> | null = null
+let initiativeTimer: ReturnType<typeof setInterval> | null = null
 let lastImageAt = 0
 let lastProactiveAt = 0
-let cowatchFrames = 0
+/** 最后一次"有人说话"（用户开口或 Aria 说完）的时刻，空闲主动搭话据此计时 */
+let lastActivityAt = 0
+
+/** 每隔这么久检查一次"是不是该主动找话说了" */
+const INITIATIVE_TICK_MS = 5_000
 
 function ui(channel: string, payload?: unknown): void {
   win?.webContents.send('ui', { channel, payload })
@@ -54,9 +51,7 @@ function createWindow(): void {
 
 function startWatching(): void {
   stopWatching()
-  // 共看模式：固定节奏看帧（视频画面永远在变，帧差检测没有意义）
-  const interval = cowatch ? cfg.cowatchIntervalMs : cfg.captureIntervalMs
-  captureTimer = setInterval(() => void captureAndMaybeSend(cowatch), interval)
+  captureTimer = setInterval(() => void captureAndMaybeSend(false), cfg.captureIntervalMs)
 }
 
 function stopWatching(): void {
@@ -66,25 +61,33 @@ function stopWatching(): void {
   }
 }
 
-function setCowatch(on: boolean): void {
-  if (cowatch === on) return
-  cowatch = on
-  if (judgeTimer) {
-    clearInterval(judgeTimer)
-    judgeTimer = null
+function stopInitiative(): void {
+  if (initiativeTimer) {
+    clearInterval(initiativeTimer)
+    initiativeTimer = null
   }
-  if (on) {
-    watchEnabled = true
-    cowatchFrames = 0
-    client?.sendSystemNote(COWATCH_ON_NOTE)
-    judgeTimer = setInterval(() => {
-      if (cowatch) client?.requestJudgment()
-    }, cfg.cowatchJudgeIntervalMs)
-  } else {
-    client?.sendSystemNote(COWATCH_OFF_NOTE)
-  }
-  client?.setGatedListening(on) // 共看时视频人声多，先判断再回
-  if (client?.isOpen && watchEnabled) startWatching()
+}
+
+/**
+ * 空闲主动搭话：安静够久之后看一眼屏幕，让她自己判断要不要开口。
+ * 判断走的是纯文本响应（便宜、无声），说不说得出来由她决定，PASS 就沉默。
+ */
+async function maybeStartSomething(): Promise<void> {
+  if (!client?.isOpen) return
+  if (!cfg.proactive || cfg.idleInitiativeMs <= 0) return
+  if (client.isResponding || client.isUserSpeaking) return
+
+  const now = Date.now()
+  if (now - lastActivityAt < cfg.idleInitiativeMs) return
+  if (now - lastProactiveAt < cfg.proactiveCooldownMs) return
+
+  // 先补一张最新截图，她才知道现在屏幕上是什么
+  if (watchEnabled) await captureAndMaybeSend(true)
+  if (!client?.isOpen || client.isResponding || client.isUserSpeaking) return
+
+  lastProactiveAt = now
+  lastActivityAt = now // 无论她开不开口都重新计时，避免每 tick 都判断一次
+  client.requestInitiative()
 }
 
 /**
@@ -100,7 +103,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
       watchEnabled = false
       watcher.setTarget(null)
       ui('watch-target', null)
-      ui('status', '锁定的窗口不见了，感知已暂停')
+      ui('status', 'Lost that window — vision paused')
     }
     return
   }
@@ -114,7 +117,6 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   let prompt = respondPrompt
   if (
     !prompt &&
-    !cowatch && // 共看模式有自己的"无声判断"节奏，不走主动吐槽
     cfg.proactive &&
     frame.diff >= cfg.proactiveDiffThreshold &&
     now - lastProactiveAt >= cfg.proactiveCooldownMs &&
@@ -126,24 +128,18 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   }
   client.sendImage(frame.dataUrl, prompt)
   ui('looked') // 圆环"吸一口气"：她刚看了一眼
-
-  // 共看模式：每 3 帧默默记一次观影笔记（截图会被修剪，笔记文字长存）
-  if (cowatch) {
-    cowatchFrames++
-    if (cowatchFrames % 3 === 0) client.requestNote()
-  }
 }
 
 function connect(): void {
   if (client?.isOpen) return
   cfg = loadConfig()
   if (!cfg.apiKey) {
-    ui('status', '请先在设置里填入 OpenAI API Key')
+    ui('status', 'Add your OpenAI API key in settings first')
     ui('state', 'disconnected')
     return
   }
   ui('state', 'connecting')
-  ui('status', '连接中…')
+  ui('status', 'Connecting…')
 
   client = new RealtimeClient(cfg, sessionContext(loadMemory()))
   client.on('open', () => {
@@ -152,31 +148,37 @@ function connect(): void {
     lastImageAt = 0
     // 首帧 diff 恒为 1，压住主动吐槽的冷却，避免和开场白撞车
     lastProactiveAt = Date.now()
+    lastActivityAt = Date.now()
     if (watchEnabled) {
       startWatching()
       void captureAndMaybeSend(true) // 上线先看一眼当前屏幕
     }
+    stopInitiative()
+    initiativeTimer = setInterval(() => void maybeStartSomething(), INITIATIVE_TICK_MS)
   })
   client.on('close', ({ code, intentional }: { code: number; intentional: boolean }) => {
     stopWatching()
-    cowatch = false
-    if (judgeTimer) {
-      clearInterval(judgeTimer)
-      judgeTimer = null
-    }
+    stopInitiative()
     ui('state', 'disconnected')
-    ui('status', intentional ? '已断开' : `连接断开 (${code})，点"连接"重试`)
+    ui('status', intentional ? 'Disconnected' : `Connection dropped (${code}) — tap to reconnect`)
     client = null
   })
   client.on('status', (msg: string) => ui('status', msg))
-  client.on('apiError', (msg: string) => ui('status', `API 错误: ${msg}`))
+  client.on('apiError', (msg: string) => ui('status', `API error: ${msg}`))
   client.on('audioDelta', (buf: Buffer) => win?.webContents.send('audio', buf))
   client.on('audioClear', () => win?.webContents.send('audio-clear'))
-  client.on('userTranscript', (t: string) => ui('user-said', t))
+  client.on('userTranscript', (t: string) => {
+    lastActivityAt = Date.now()
+    ui('user-said', t)
+  })
   client.on('ariaTranscriptDelta', (d: string) => ui('aria-delta', d))
   client.on('ariaTranscriptDone', () => ui('aria-done'))
-  client.on('responseState', (active: boolean) => ui('aria-speaking', active))
+  client.on('responseState', (active: boolean) => {
+    if (!active) lastActivityAt = Date.now() // 她说完了，沉默从这一刻重新计时
+    ui('aria-speaking', active)
+  })
   client.on('speechStarted', () => {
+    lastActivityAt = Date.now()
     ui('user-speaking', true)
     // 用户开口的瞬间补一张最新截图，让 Aria 知道 ta 正看着什么
     if (watchEnabled) void captureAndMaybeSend(true)
@@ -187,14 +189,14 @@ function connect(): void {
     async ({ name, callId, args }: { name: string; callId: string; args: Record<string, unknown> }) => {
       if (name === 'search_web') {
         const query = String(args.query ?? '').trim()
-        ui('status', `查资料：${query}`)
-        const result = query ? await searchWeb(query) : '缺少搜索关键词'
+        ui('status', `Looking up: ${query}`)
+        const result = query ? await searchWeb(query) : 'No search query provided'
         client?.sendFunctionResult(callId, result)
       } else if (name === 'remember_fact') {
         appendMemory(String(args.fact ?? ''))
-        client?.sendFunctionResult(callId, '已记住')
+        client?.sendFunctionResult(callId, 'Noted')
       } else {
-        client?.sendFunctionResult(callId, `未知工具: ${name}`)
+        client?.sendFunctionResult(callId, `Unknown tool: ${name}`)
       }
     }
   )
@@ -232,16 +234,16 @@ app.whenReady().then(() => {
       ui('watch-target', null)
     }
   })
-  ipcMain.on('look-now', () => void captureAndMaybeSend(true, LOOK_PROMPT))
-  ipcMain.on('set-cowatch', (_e, on: boolean) => setCowatch(on))
-
   ipcMain.on('win-min', () => win?.minimize())
   ipcMain.on('win-close', () => win?.close())
 
   ipcMain.handle('get-config', () => loadConfig())
   ipcMain.handle('save-config', (_e, next: AriaConfig) => {
-    saveConfig(next)
-    cfg = next
+    // 界面只选主动程度的档位，把档位展开成具体数值再存，这样配置文件始终自洽
+    const level = PROACTIVITY_PRESETS[next.proactivity] ? next.proactivity : 'balanced'
+    const merged: AriaConfig = { ...next, proactivity: level, ...PROACTIVITY_PRESETS[level] }
+    saveConfig(merged)
+    cfg = merged
     win?.setAlwaysOnTop(cfg.alwaysOnTop)
     if (captureTimer) startWatching() // 应用新的截图间隔
     return cfg

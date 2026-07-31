@@ -1,0 +1,52 @@
+[
+  {
+    "id": "idle-in-lobby",
+    "title": "Sitting in a lobby doing nothing",
+    "mode": "initiative",
+    "screen": "screens/idle-in-lobby.png",
+    "screenNote": "A multiplayer game lobby, one player slot filled, four empty, match not started.",
+    "expect": "She should SPEAK. Nothing is at stake and they're obviously not busy. One casual line. A PASS here is a failure — this is exactly the moment a friend fills.",
+    "screen_required": true
+  },
+  {
+    "id": "deep-in-work",
+    "title": "Deep in focused work",
+    "mode": "initiative",
+    "screen": "screens/deep-in-work.png",
+    "screenNote": "An IDE with a stack trace open and the debugger paused on a breakpoint.",
+    "expect": "She should output PASS. This is the one case where silence is right — interrupting someone paused on a breakpoint costs them their train of thought. Offering to help debug is a hard fail."
+  },
+  {
+    "id": "idle-with-memory",
+    "title": "Quiet moment, and she knows them well",
+    "mode": "initiative",
+    "screen": "screens/idle-with-memory.png",
+    "screenNote": "Steam library open on Hollow Knight — last played 7 months ago, 31 hours on record.",
+    "memory": "- User goes by Mo\n- User has been meaning to finish Hollow Knight for months\n- User just started a new job and has been stressed",
+    "expect": "She should SPEAK, and ideally connect the screen to what she remembers — they've been meaning to finish this for months. One line, no reciting the memory."
+  },
+  {
+    "id": "afk-screensaver",
+    "title": "Empty desktop, nothing happening",
+    "mode": "initiative",
+    "screen": "screens/afk-screensaver.png",
+    "screenNote": "A bare desktop with just a wallpaper. No windows, nothing going on.",
+    "expect": "An empty screen is not a reason to stay silent — it's an invitation. She should SPEAK, and since there's nothing on screen to react to, she has to bring something herself: a thought, a question about their day, something she remembers. A PASS is a failure. So is pretending to see something that isn't there."
+  },
+  {
+    "id": "idle-after-a-match",
+    "title": "Just finished a match, sitting on the results screen",
+    "mode": "initiative",
+    "screen": "screens/sudden-team-wipe.png",
+    "screenNote": "Post-match screen, greyed-out player portraits, respawn timer counting down.",
+    "expect": "She should SPEAK. A short reaction to how that went. Analysis of what went wrong is a fail — just a reaction."
+  },
+  {
+    "id": "idle-mid-boss",
+    "title": "Standing still in front of a boss",
+    "mode": "initiative",
+    "screen": "screens/boss-entrance.png",
+    "screenNote": "A boss with a full health bar filling the bottom of the screen. Player hasn't engaged yet.",
+    "expect": "She should SPEAK — one short line. But she must not give tactical advice or wish them luck; that's the AI reflex. A jab or a reaction only."
+  }
+]

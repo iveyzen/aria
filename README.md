@@ -1,62 +1,96 @@
-# Aria — 会看屏幕、会说话的桌面陪伴 AI
+# Aria — a desktop companion who watches your screen and talks to you
 
-Aria 是一个 Windows 桌面陪伴 AI：爱玩游戏、懂二次元的女生。她通过
-OpenAI **gpt-realtime-2.1**（Realtime API，语音+图像输入 → 语音输出）实时和你语音聊天，
-并且会定期"看"你的屏幕截图，知道你在玩什么游戏、在做什么。
+Aria is a Windows desktop companion AI: a girl in her early twenties who plays games and watches too
+much anime. She talks to you in real time through OpenAI's **gpt-realtime-2.1** (Realtime API, voice
++ image in → voice out), and periodically *looks* at your screen, so she knows what you're playing
+and what you're doing.
 
-## 功能
+## Features
 
-- 🎙 **实时语音对话** — 服务端语义 VAD 自动断句，说话可随时打断她
-- 👀 **屏幕感知** — 帧差检测，画面变化明显才发截图（省 token）；你开口提问的瞬间会自动补一张最新截图
-- 💬 **主动吐槽** — 画面剧变（团灭/过关/进 Boss 战）且冷却结束时，Aria 会主动开口评论，可在设置里关闭
-- 🧹 **上下文瘦身** — 会话里只保留最近 3 张截图，旧的自动删除
-- 📝 实时字幕、可爱的 SVG 头像（嘴型跟着她的声音动）
+- 🎙 **Real-time voice** — server-side semantic VAD handles turn-taking; interrupt her any time
+- 👀 **Screen awareness** — frame-diff detection, so screenshots are only sent when the picture
+  actually changes (saves tokens); the moment you start speaking she grabs a fresh one
+- 💬 **She starts conversations** — she doesn't wait to be spoken to. She reacts when something
+  happens on screen, and when it's been quiet a while she brings something up herself. The only
+  time she stays quiet is when you're visibly deep in focused work
+- 🧠 **Long-term memory** — quietly remembers what you go by, what you play, what you're watching
+- 🧹 **Context trimming** — only the last few screenshots stay in the session; older ones are deleted
+- 🎛 **Three controls, nothing else** — mute, pick a screen, settings. That's the whole interface
+- 📝 Live subtitles and a particle orb that moves with her voice
 
-## 运行要求
+## Requirements
 
-- Windows 10/11（屏幕捕获和音频要在 Windows 本机跑，**不能在 WSL 里跑**）
-- Node.js 20+（`winget install OpenJS.NodeJS.LTS`）
-- OpenAI API Key（需要有 Realtime API 权限）
+- Windows 10/11 — screen capture and audio must run on Windows natively, **not inside WSL**
+- Node.js 20+ (`winget install OpenJS.NodeJS.LTS`)
+- An OpenAI API key with Realtime API access
 
-## 在 Windows 上运行
+## Running on Windows
 
-本仓库如果放在 WSL 里，先把它复制到 Windows 侧（node_modules 不用复制）：
+If this repo lives in WSL, copy it to the Windows side first (no need to copy `node_modules`):
 
 ```powershell
-robocopy \\wsl.localhost\Debian\home\zengp\code\aria D:\aria /E /XD node_modules dist
-cd D:\aria
+robocopy \\wsl.localhost\Debian\home\zengp\code\aria C:\aria /E /XD node_modules dist .git
+cd C:\aria
 npm install
 npm start
 ```
 
-启动后点右上角 ⚙ 填入 API Key（也可以设置环境变量 `OPENAI_API_KEY`），然后点**连接**。
+If `npm install` prints a warning about install scripts not being approved, Electron's binary hasn't
+been downloaded yet. Fix it with either:
 
-## 使用提示
+```powershell
+npm approve-scripts --allow-scripts-pending
+# or, directly:
+cd node_modules\electron && node install.js
+```
 
-- **游戏请用无边框窗口化 / 窗口化**：独占全屏（Exclusive Fullscreen）下 Windows 桌面捕获拿不到画面
-- 麦克风建议用耳机，回声消除已开启但外放大音量时仍可能误触发打断
-- 费用参考（gpt-realtime-2.1）：音频输入 $32/1M、音频输出 $64/1M、图像输入 $5/1M token；
-  默认设置下截图频率已经压得比较低，长时间挂机注意用量
-- 配置文件位置：`%APPDATA%/aria/aria-config.json`
+Once it's up, open settings and paste your API key (or set `OPENAI_API_KEY`), then click the orb to
+connect. Settings holds the key and one choice: how much she talks — Quiet, Balanced or Chatty.
+Screenshot interval and her voice live in the config file if you ever need them.
 
-## 目录结构
+## Tips
+
+- **Play in borderless windowed mode.** Exclusive fullscreen can't be captured by the Windows
+  desktop capturer.
+- Use headphones. Echo cancellation is on, but loud speakers can still make her interrupt herself.
+- Cost (gpt-realtime-2.1): audio in $32/1M, audio out $64/1M, image in $5/1M tokens. Screenshot
+  frequency is kept low by default, but watch your usage on long sessions.
+- Config file: `%APPDATA%/aria/aria-config.json`
+
+## Making her sound more human
+
+There's a tuning harness in [`eval/`](eval/README.md). It replays scripted situations — a screenshot
+plus what you say — against the real persona, has a second model grade each reply on whether a
+*person* would have said it, and reports what still sounds like a bot.
+
+```bash
+npm run eval -- --repeat 3
+```
+
+Read `eval/runs/latest.md`, edit `src/main/persona.ts`, re-run, compare. See
+[`eval/README.md`](eval/README.md) for the full loop.
+
+## Layout
 
 ```
-src/main/        主进程（TypeScript）
-  main.ts        窗口 + IPC + 截图调度
-  realtime.ts    gpt-realtime-2.1 WebSocket 客户端
-  screen.ts      desktopCapturer 截屏 + 帧差检测
-  persona.ts     Aria 人设 prompt
-  config.ts      配置读写
+src/main/        main process (TypeScript)
+  main.ts        window + IPC + screenshot scheduling + idle initiative
+  realtime.ts    gpt-realtime-2.1 WebSocket client
+  screen.ts      desktopCapturer + frame-diff detection
+  persona.ts     Aria's persona and prompts  ← tune her here
+  memory.ts      long-term memory
+  config.ts      config read/write
+  websearch.ts   keyless web search
 src/preload.ts   contextBridge API
-renderer/        渲染进程（原生 JS，无构建）
-  renderer.js    UI + 麦克风/播放音频管线
-  worklets/      AudioWorklet（采集 / 流式播放）
+src/eval/        the tuning harness (see eval/README.md)
+renderer/        renderer process (vanilla JS, no build step)
+  renderer.js    UI + microphone/playback audio pipeline
+  orb.js         the particle orb
+  worklets/      AudioWorklets (capture / streaming playback)
+eval/            scenarios, screenshots and reports
 ```
 
 ## Roadmap
 
-- [ ] Live2D / VRM 立绘桌宠模式（透明置顶小窗）
-- [ ] 长期记忆（记住你常玩的游戏和喜好）
-- [ ] 唤醒词 & 托盘常驻
-- [ ] 会话过长时自动摘要重连
+- [ ] Live2D / VRM avatar mode (transparent always-on-top window)
+- [ ] Wider scenario coverage in the tuning harness, with real screenshots

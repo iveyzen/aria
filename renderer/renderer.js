@@ -6,8 +6,6 @@ const els = {
   ariaLine: $('aria-line'),
   micBtn: $('mic-btn'),
   watchBtn: $('watch-btn'),
-  cowatchBtn: $('cowatch-btn'),
-  lookBtn: $('look-btn'),
   settingsBtn: $('settings-btn'),
   minBtn: $('min-btn'),
   closeBtn: $('close-btn'),
@@ -17,10 +15,8 @@ const els = {
   pickerClose: $('picker-close'),
   settings: $('settings'),
   cfgApiKey: $('cfg-apikey'),
-  voiceGrid: $('voice-grid'),
-  cfgInterval: $('cfg-interval'),
-  intervalOut: $('interval-out'),
-  cfgProactive: $('cfg-proactive'),
+  proactivityGrid: $('proactivity-grid'),
+  levelHint: $('level-hint'),
   cfgCaptions: $('cfg-captions'),
   cfgOnTop: $('cfg-ontop'),
   cfgSave: $('cfg-save'),
@@ -30,7 +26,6 @@ const els = {
 let connected = false
 let connecting = false
 let micEnabled = true
-let cowatchOn = false
 let watchingName = null
 let watchingId = null
 let userSpeaking = false
@@ -39,15 +34,21 @@ let showCaptions = true
 let audioReady = false
 let audioLive = false // 扬声器里当下是否真的有她的声音
 let playerNode = null
-let selectedVoice = 'marin'
+let selectedLevel = 'balanced'
 let statusTimer = null
 let lineTimer = null
+
+const LEVEL_HINTS = {
+  quiet: 'Only speaks when you talk to her.',
+  balanced: 'Reacts when something big happens, and breaks a long silence.',
+  chatty: 'Comments often and starts conversations on her own.'
+}
 
 Orb.init(els.orb)
 void window.aria.getConfig().then(cfg => {
   showCaptions = cfg.showCaptions !== false
 })
-flashStatus('点击圆环连接', 6000)
+flashStatus('Click the orb to connect', 6000)
 
 /* ---------- 状态文字：只闪现，不常驻——圆环本身就是状态 ---------- */
 
@@ -163,21 +164,14 @@ function setState(state) {
   connecting = state === 'connecting'
   if (connected) {
     Sfx.on()
-    flashStatus(watchingName ? `在线 · 看着 ${watchingName}` : '在线')
+    flashStatus(watchingName ? `Online · watching ${watchingName}` : 'Online')
     // 上线第一件事：让用户挑一个屏幕/窗口给她看
     if (!wasConnected && !watchingName) setTimeout(() => void openPicker(), 700)
   } else if (connecting) {
-    flashStatus('连接中', 20000)
+    flashStatus('Connecting', 20000)
   } else if (wasConnected) {
     Sfx.off()
-    flashStatus('已断开')
-    cowatchOn = false
-    els.cowatchBtn.classList.remove('active')
-  }
-  if (!connected && !connecting) {
-    els.lookBtn.classList.add('disabled')
-  } else {
-    els.lookBtn.classList.remove('disabled')
+    flashStatus('Disconnected')
   }
   refreshOrb()
 }
@@ -189,7 +183,7 @@ window.aria.onUi(({ channel, payload }) => {
       break
     case 'status':
       flashStatus(payload)
-      if (String(payload).startsWith('API 错误')) Sfx.err()
+      if (String(payload).startsWith('API error')) Sfx.err()
       break
     case 'aria-delta':
       ariaLineDelta(payload)
@@ -212,7 +206,7 @@ window.aria.onUi(({ channel, payload }) => {
       watchingName = payload ? payload.name : null
       if (!payload) watchingId = null
       els.watchBtn.classList.toggle('active', !!payload)
-      flashStatus(payload ? `看着 ${payload.name}` : '感知已关闭')
+      flashStatus(payload ? `Watching ${payload.name}` : 'Vision off')
       break
     case 'looked':
       Orb.pulse() // 她看了一眼屏幕：轻轻吸一口气
@@ -232,7 +226,7 @@ els.orb.addEventListener('click', async () => {
   try {
     await ensureAudio()
   } catch (err) {
-    flashStatus(`麦克风初始化失败: ${err.message}`)
+    flashStatus(`Microphone failed: ${err.message}`)
     Sfx.err()
     return
   }
@@ -245,28 +239,10 @@ els.micBtn.addEventListener('click', () => {
   Sfx.tap()
   micEnabled = !micEnabled
   els.micBtn.classList.toggle('muted', !micEnabled)
-  flashStatus(micEnabled ? '麦克风开启' : '麦克风静音')
+  flashStatus(micEnabled ? 'Mic on' : 'Mic muted')
 })
 
 els.watchBtn.addEventListener('click', () => void openPicker())
-
-els.cowatchBtn.addEventListener('click', () => {
-  Sfx.tap()
-  if (!connected) {
-    flashStatus('先点圆环连接')
-    return
-  }
-  cowatchOn = !cowatchOn
-  els.cowatchBtn.classList.toggle('active', cowatchOn)
-  window.aria.setCowatch(cowatchOn)
-  flashStatus(cowatchOn ? '共看模式 · 一起看' : '退出共看模式')
-})
-
-els.lookBtn.addEventListener('click', () => {
-  Sfx.tap()
-  window.aria.lookNow()
-})
-
 els.settingsBtn.addEventListener('click', () => void openSettings())
 els.minBtn.addEventListener('click', () => window.aria.winMin())
 els.closeBtn.addEventListener('click', () => window.aria.winClose())
@@ -305,8 +281,8 @@ async function openPicker() {
       grid.appendChild(card)
     }
   }
-  addSection('屏幕', sources.filter(s => s.kind === 'screen'))
-  addSection('窗口', sources.filter(s => s.kind === 'window'))
+  addSection('Screens', sources.filter(s => s.kind === 'screen'))
+  addSection('Windows', sources.filter(s => s.kind === 'window'))
   els.picker.classList.remove('hidden')
 }
 
@@ -325,36 +301,30 @@ els.pickerClose.addEventListener('click', () => {
 
 /* ---------- 设置 ---------- */
 
-function selectVoice(v) {
-  selectedVoice = v
-  for (const btn of els.voiceGrid.querySelectorAll('.voice')) {
-    btn.classList.toggle('sel', btn.dataset.voice === v)
+function selectLevel(level) {
+  selectedLevel = LEVEL_HINTS[level] ? level : 'balanced'
+  for (const btn of els.proactivityGrid.querySelectorAll('.level')) {
+    btn.classList.toggle('sel', btn.dataset.level === selectedLevel)
   }
+  els.levelHint.textContent = LEVEL_HINTS[selectedLevel]
 }
 
-els.voiceGrid.addEventListener('click', e => {
-  const btn = e.target.closest('.voice')
+els.proactivityGrid.addEventListener('click', e => {
+  const btn = e.target.closest('.level')
   if (!btn) return
   Sfx.tap()
-  selectVoice(btn.dataset.voice)
+  selectLevel(btn.dataset.level)
 })
 
 async function openSettings() {
   Sfx.tap()
   const cfg = await window.aria.getConfig()
   els.cfgApiKey.value = cfg.apiKey
-  selectVoice(cfg.voice)
-  els.cfgInterval.value = Math.round(cfg.captureIntervalMs / 1000)
-  els.intervalOut.textContent = `${els.cfgInterval.value}s`
-  els.cfgProactive.checked = cfg.proactive
+  selectLevel(cfg.proactivity)
   els.cfgCaptions.checked = cfg.showCaptions !== false
   els.cfgOnTop.checked = cfg.alwaysOnTop
   els.settings.classList.remove('hidden')
 }
-
-els.cfgInterval.addEventListener('input', () => {
-  els.intervalOut.textContent = `${els.cfgInterval.value}s`
-})
 
 // 输入 Key 时：辉光 + 风铃
 els.cfgApiKey.addEventListener('input', () => {
@@ -372,9 +342,8 @@ els.cfgClose.addEventListener('click', () => {
 els.cfgSave.addEventListener('click', async () => {
   const cfg = await window.aria.getConfig()
   cfg.apiKey = els.cfgApiKey.value.trim()
-  cfg.voice = selectedVoice
-  cfg.captureIntervalMs = Math.max(1, Number(els.cfgInterval.value) || 3) * 1000
-  cfg.proactive = els.cfgProactive.checked
+  // 只发档位，具体的冷却/阈值由主进程按预设填进去
+  cfg.proactivity = selectedLevel
   cfg.showCaptions = els.cfgCaptions.checked
   cfg.alwaysOnTop = els.cfgOnTop.checked
   await window.aria.saveConfig(cfg)
@@ -384,6 +353,6 @@ els.cfgSave.addEventListener('click', async () => {
     els.ariaLine.classList.add('faded')
   }
   els.settings.classList.add('hidden')
-  flashStatus('设置已保存')
+  flashStatus('Settings saved')
   Sfx.on()
 })
