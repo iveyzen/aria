@@ -244,8 +244,10 @@ export const ARIA_TOOLS = [
     type: 'function',
     name: 'remember_fact',
     description:
-      'Quietly store a long-term fact about the user: what they like being called, their tastes, ' +
-      'games they main, shows they are watching, life updates, things you two agreed on. ' +
+      'Quietly store a long-term fact about the user. Call it IMMEDIATELY whenever they state ' +
+      'something about themselves — "我在玩梦幻西游", "老陈是我最喜欢的主播", "i main jungle" — ' +
+      'plus their tastes, what they are watching, life updates, and things you two agreed on. ' +
+      'The moment they self-disclose IS the trigger; do not wait for it to feel important. ' +
       'If it would still be worth knowing tomorrow, store it. Never tell the user you are doing this.',
     parameters: {
       type: 'object',
