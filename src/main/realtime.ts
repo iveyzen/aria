@@ -20,6 +20,8 @@ import {
  *  audioDelta(Buffer PCM16@24k) / audioClear
  *  userTranscript(string) / ariaTranscriptDelta(string) / ariaTranscriptDone
  *  speechStarted / speechStopped / responseState(boolean)
+ *  judged({line, spoke}) — outcome of a silent initiative judgment
+ *  probeResult(string) — reply to a copilot probe (out-of-band, never enters her context)
  */
 export class RealtimeClient extends EventEmitter {
   private ws: WebSocket | null = null
@@ -31,6 +33,8 @@ export class RealtimeClient extends EventEmitter {
   private greeted = false
   /** Whether we are waiting on the result of a silent "should I speak" judgment */
   private pendingJudge = false
+  /** Copilot persona override; null = the built-in ARIA_INSTRUCTIONS */
+  private personaOverride: string | null = null
 
   /** extraContext: dynamic context at connect time (time, long-term memory), appended after the persona */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
@@ -98,6 +102,51 @@ export class RealtimeClient extends EventEmitter {
     })
   }
 
+  /**
+   * Swap the persona live (copilot tuning). null reverts to the built-in persona.
+   * session.update merges fields, so only instructions change; the greeting guard keeps her from re-greeting.
+   */
+  setPersona(text: string | null): void {
+    this.personaOverride = text
+    if (this.isOpen) {
+      this.send({
+        type: 'session.update',
+        session: { type: 'realtime', instructions: this.instructionsText() }
+      })
+    }
+  }
+
+  /** Copilot: inject a text message as the user and have her respond, barging in like real speech would */
+  sayAsUser(text: string): void {
+    if (!this.isOpen) return
+    if (this.responseActive) {
+      this.send({ type: 'response.cancel' })
+      this.emit('audioClear')
+    }
+    this.send({
+      type: 'conversation.item.create',
+      item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
+    })
+    this.send({ type: 'response.create' })
+  }
+
+  /**
+   * Copilot: ask her something out-of-band. The response is text-only and never joins the
+   * conversation (conversation:'none'), so her state is probed without her "experiencing" it.
+   */
+  probe(question: string): void {
+    if (!this.isOpen) return
+    this.send({
+      type: 'response.create',
+      response: {
+        conversation: 'none',
+        output_modalities: ['text'],
+        metadata: { kind: 'copilot_probe' },
+        instructions: question
+      }
+    })
+  }
+
   /** Return a tool call's result and let Aria continue speaking */
   sendFunctionResult(callId: string, output: string): void {
     if (!this.isOpen) return
@@ -128,12 +177,16 @@ export class RealtimeClient extends EventEmitter {
     if (this.isOpen) this.ws!.send(JSON.stringify(event))
   }
 
+  private instructionsText(): string {
+    return (this.personaOverride ?? ARIA_INSTRUCTIONS) + this.extraContext
+  }
+
   private configureSession(): void {
     this.send({
       type: 'session.update',
       session: {
         type: 'realtime',
-        instructions: ARIA_INSTRUCTIONS + this.extraContext,
+        instructions: this.instructionsText(),
         tools: ARIA_TOOLS,
         tool_choice: 'auto',
         output_modalities: ['audio'],
@@ -232,11 +285,18 @@ export class RealtimeClient extends EventEmitter {
       case 'response.done': {
         this.responseActive = false
         this.emit('responseState', false)
+        // Copilot probes are out-of-band; intercept them before the judge branch can mistake one for its result
+        if (ev.response?.metadata?.kind === 'copilot_probe') {
+          this.emit('probeResult', this.extractText(ev.response))
+          break
+        }
         if (this.pendingJudge) {
           this.pendingJudge = false
           const line = this.extractText(ev.response)
+          const spoke = Boolean(line && !/^pass\b/i.test(line) && !this.userSpeaking)
+          this.emit('judged', { line, spoke })
           // She decided to speak: actually say that line out loud; on PASS do nothing
-          if (line && !/^pass\b/i.test(line) && !this.userSpeaking) {
+          if (spoke) {
             this.send({ type: 'response.create', response: { instructions: speakJudged(line) } })
           }
         }

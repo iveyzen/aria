@@ -108,3 +108,39 @@ If a scenario names a `screen` file that isn't there, it still runs — text-onl
 
 Text-only Realtime plus one grader call per line. A full `--repeat 3` pass over the shipped set is
 roughly 48 graded lines and costs well under a dollar. `--no-judge` roughly halves it.
+
+## Copilot mode (live tuning)
+
+Scripted scenarios test what you thought to script. Copilot mode taps a **real** session instead:
+start the app with
+
+```bash
+npm start -- --copilot        # or set ARIA_COPILOT=1
+```
+
+and everything the session does is mirrored into `copilot/` next to the app (on a `D:\aria` install
+that's `/mnt/d/aria/copilot` from WSL, so a coding agent on the Linux side can work with it live):
+
+- `session-<ts>.jsonl` — every event: screenshots sent, both sides' transcripts, tool calls,
+  initiative checks and their verdicts (`spoke` / PASS and the line), API errors.
+- `frames/*.jpg` — the exact images she saw. A multimodal agent reads these directly; whatever
+  judgment it forms is grounded in the same input.
+- `inbox.jsonl` — append-only command channel into the running app. One JSON object per line:
+
+  | command | effect |
+  | --- | --- |
+  | `{"cmd":"say","text":"..."}` | injected as the user speaking; she responds (barging in if she was mid-line) |
+  | `{"cmd":"probe","text":"..."}` | out-of-band text question; the reply lands in the log as `probe_result` and **never enters her context** — probe her read on the situation without her experiencing the question |
+  | `{"cmd":"note","text":"..."}` | inject a system note, no response triggered |
+  | `{"cmd":"look"}` | force a screenshot right now |
+  | `{"cmd":"reload_persona"}` | re-read `copilot/persona.md` and hot-swap it via session.update — no restart, no re-greeting; delete the file (or leave it empty) to revert to the built-in persona |
+
+The tuning loop this enables: use the app normally, let the agent read the session log plus frames,
+flag lines that sound like a bot, edit `copilot/persona.md`, `reload_persona`, then `say`/`probe` to
+re-test the exact situation — seconds per iteration instead of a restart. When an edit survives live
+testing, port it into `src/main/persona.ts` and confirm with `npm run eval -- --repeat 3`.
+
+Commands already in `inbox.jsonl` when the app starts are skipped (stale by definition); truncating
+the file mid-run is fine.
+
+`copilot/` contains real captures of your desktop. It is gitignored — keep it that way.

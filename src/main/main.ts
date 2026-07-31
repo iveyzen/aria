@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
 import { AriaConfig, PROACTIVITY_PRESETS, loadConfig, saveConfig } from './config'
+import { Copilot, CopilotCommand } from './copilot'
 import { appendMemory, loadMemory } from './memory'
 import { PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
@@ -12,6 +13,7 @@ const WINDOW_TITLE = 'Aria'
 let win: BrowserWindow | null = null
 let client: RealtimeClient | null = null
 let cfg: AriaConfig
+let copilot: Copilot
 const watcher = new ScreenWatcher()
 
 let watchEnabled = true
@@ -87,7 +89,40 @@ async function maybeStartSomething(): Promise<void> {
 
   lastProactiveAt = now
   lastActivityAt = now // Restart the timer whether or not she speaks, to avoid judging on every tick
+  copilot.record('initiative_check')
   client.requestInitiative()
+}
+
+/** Copilot mode: commands appended to copilot/inbox.jsonl land here */
+function handleCopilotCommand(c: CopilotCommand): void {
+  switch (c.cmd) {
+    case 'say':
+      if (c.text && client?.isOpen) {
+        lastActivityAt = Date.now()
+        client.sayAsUser(c.text)
+      }
+      break
+    case 'probe':
+      if (c.text) client?.probe(c.text)
+      break
+    case 'note':
+      if (c.text) client?.sendSystemNote(c.text)
+      break
+    case 'look':
+      if (client?.isOpen) void captureAndMaybeSend(true)
+      break
+    case 'reload_persona': {
+      const override = copilot.loadPersonaOverride()
+      client?.setPersona(override)
+      copilot.record('persona_reload', {
+        source: override ? 'copilot/persona.md' : 'built-in',
+        chars: override?.length ?? 0
+      })
+      break
+    }
+    default:
+      copilot.record('command_unknown', { cmd: c.cmd })
+  }
 }
 
 /**
@@ -128,6 +163,16 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   }
   client.sendImage(frame.dataUrl, prompt)
   ui('looked') // The ring "takes a breath": she just took a look
+
+  const saved = copilot.saveFrame(frame.dataUrl)
+  if (saved) {
+    copilot.record('screenshot', {
+      file: saved,
+      diff: Number(frame.diff.toFixed(3)),
+      forced,
+      prompted: Boolean(prompt)
+    })
+  }
 }
 
 function connect(): void {
@@ -142,7 +187,14 @@ function connect(): void {
   ui('status', 'Connecting…')
 
   client = new RealtimeClient(cfg, sessionContext(loadMemory()))
+  const personaOverride = copilot.loadPersonaOverride()
+  if (personaOverride) client.setPersona(personaOverride)
   client.on('open', () => {
+    copilot.record('connected', {
+      model: cfg.model,
+      proactivity: cfg.proactivity,
+      persona: personaOverride ? 'copilot/persona.md' : 'built-in'
+    })
     ui('state', 'connected')
     watcher.reset()
     lastImageAt = 0
@@ -159,20 +211,46 @@ function connect(): void {
   client.on('close', ({ code, intentional }: { code: number; intentional: boolean }) => {
     stopWatching()
     stopInitiative()
+    copilot.record('disconnected', { code, intentional })
     ui('state', 'disconnected')
     ui('status', intentional ? 'Disconnected' : `Connection dropped (${code}) — tap to reconnect`)
     client = null
   })
   client.on('status', (msg: string) => ui('status', msg))
-  client.on('apiError', (msg: string) => ui('status', `API error: ${msg}`))
+  client.on('apiError', (msg: string) => {
+    copilot.record('api_error', { text: msg })
+    ui('status', `API error: ${msg}`)
+  })
+  // Accumulate her transcript for the copilot log; a barge-in never fires ariaTranscriptDone,
+  // so the partial line is flushed (marked interrupted) when the audio gets cleared
+  let ariaLine = ''
+  const flushAriaLine = (interrupted: boolean): void => {
+    const text = ariaLine.trim()
+    ariaLine = ''
+    if (text) copilot.record('aria_text', interrupted ? { text, interrupted } : { text })
+  }
   client.on('audioDelta', (buf: Buffer) => win?.webContents.send('audio', buf))
-  client.on('audioClear', () => win?.webContents.send('audio-clear'))
+  client.on('audioClear', () => {
+    flushAriaLine(true)
+    win?.webContents.send('audio-clear')
+  })
   client.on('userTranscript', (t: string) => {
     lastActivityAt = Date.now()
+    copilot.record('user_text', { text: t })
     ui('user-said', t)
   })
-  client.on('ariaTranscriptDelta', (d: string) => ui('aria-delta', d))
-  client.on('ariaTranscriptDone', () => ui('aria-done'))
+  client.on('ariaTranscriptDelta', (d: string) => {
+    ariaLine += d
+    ui('aria-delta', d)
+  })
+  client.on('ariaTranscriptDone', () => {
+    flushAriaLine(false)
+    ui('aria-done')
+  })
+  client.on('judged', ({ line, spoke }: { line: string; spoke: boolean }) => {
+    copilot.record('initiative_result', { spoke, line })
+  })
+  client.on('probeResult', (text: string) => copilot.record('probe_result', { text }))
   client.on('responseState', (active: boolean) => {
     if (!active) lastActivityAt = Date.now() // She finished speaking; the silence clock restarts from this moment
     ui('aria-speaking', active)
@@ -187,10 +265,12 @@ function connect(): void {
   client.on(
     'functionCall',
     async ({ name, callId, args }: { name: string; callId: string; args: Record<string, unknown> }) => {
+      copilot.record('tool_call', { name, args })
       if (name === 'search_web') {
         const query = String(args.query ?? '').trim()
         ui('status', `Looking up: ${query}`)
         const result = query ? await searchWeb(query) : 'No search query provided'
+        copilot.record('tool_result', { name, text: result.slice(0, 300) })
         client?.sendFunctionResult(callId, result)
       } else if (name === 'remember_fact') {
         appendMemory(String(args.fact ?? ''))
@@ -206,6 +286,8 @@ function connect(): void {
 
 app.whenReady().then(() => {
   cfg = loadConfig()
+  copilot = new Copilot(app.getAppPath())
+  copilot.start(handleCopilotCommand)
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'media')
   })
@@ -257,5 +339,6 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   client?.close()
+  copilot?.stop()
   app.quit()
 })
