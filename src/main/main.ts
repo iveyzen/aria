@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
-import { AriaConfig, PROACTIVITY_PRESETS, loadConfig, saveConfig } from './config'
+import { AriaConfig, PROACTIVITY_PRESETS, ProactivityLevel, loadConfig, saveConfig } from './config'
 import { Copilot, CopilotCommand } from './copilot'
 import { addFact, memoryContext } from './memory'
 import { INITIATIVE_PROMPT, PROACTIVE_PROMPT, sessionContext } from './persona'
@@ -296,6 +296,31 @@ function connect(): void {
         const result = query ? await searchWeb(query) : 'No search query provided'
         copilot.record('tool_result', { name, text: result.slice(0, 300) })
         client?.sendFunctionResult(callId, result)
+      } else if (name === 'set_chattiness') {
+        // She turns her own volume knob when asked — same presets the settings UI writes
+        const ladder: ProactivityLevel[] = ['quiet', 'balanced', 'chatty']
+        const step = args.direction === 'more' ? 1 : -1
+        const idx = Math.max(0, Math.min(ladder.length - 1, ladder.indexOf(cfg.proactivity) + step))
+        const level = ladder[idx]
+        const changed = level !== cfg.proactivity
+        cfg = { ...cfg, proactivity: level, ...PROACTIVITY_PRESETS[level] }
+        saveConfig(cfg)
+        if (captureTimer) startWatching()
+        unansweredInitiatives = 0
+        copilot.record('chattiness', { level, changed })
+        ui('status', `Volume: ${level}`)
+        client?.sendFunctionResult(
+          callId,
+          changed
+            ? `Now "${level}". ${
+                level === 'quiet'
+                  ? 'You only speak when spoken to.'
+                  : level === 'chatty'
+                    ? 'You chime in freely.'
+                    : 'You chime in at a relaxed pace.'
+              }`
+            : `Already at "${level}" — no ${args.direction === 'more' ? 'louder' : 'quieter'} setting exists.`
+        )
       } else if (name === 'recall_screen') {
         client?.sendFunctionResult(callId, stm.recentScreens())
       } else if (name === 'remember_fact') {
