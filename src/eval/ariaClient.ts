@@ -1,6 +1,6 @@
 import WebSocket from 'ws'
 import { ARIA_INSTRUCTIONS, ARIA_TOOLS, oneOffInstructions, sessionContext } from '../main/persona'
-import { searchWeb } from '../main/websearch'
+import { executeTool } from '../main/tools'
 import { ToolCall } from './types'
 
 /**
@@ -133,14 +133,17 @@ export class EvalAriaClient {
     return { text: text.trim(), toolCalls }
   }
 
+  /** Same executor as production (main.ts) — only the side effects are stubbed for the sandbox */
   private async execTool(name: string, args: Record<string, unknown>): Promise<string> {
-    if (name === 'search_web') {
-      const q = String(args.query ?? '').trim()
-      return q ? await searchWeb(q) : 'No search query provided'
-    }
-    // remember_fact: not persisted to disk in evals — acknowledging is enough (whether she chooses to remember is itself a scoring signal)
-    if (name === 'remember_fact') return 'Noted'
-    return `Unknown tool: ${name}`
+    return executeTool(name, args, {
+      // Not persisted to disk in evals — acknowledging is enough (whether she chooses to remember is itself a scoring signal)
+      rememberFact: () => {},
+      recallScreens: () => 'No screen text recorded yet.',
+      setChattiness: direction =>
+        direction === 'less'
+          ? 'Now "quiet". You only speak when spoken to.'
+          : 'Now "chatty". You chime in freely.'
+    })
   }
 
   private awaitResponse(): Promise<ResponseResult> {

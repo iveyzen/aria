@@ -19,9 +19,16 @@ import {
  *  open / close({code, reason, intentional}) / status(string) / apiError(string)
  *  audioDelta(Buffer PCM16@24k) / audioClear
  *  userTranscript(string) / ariaTranscriptDelta(string) / ariaTranscriptDone
+ *  ariaLine({text, interrupted}) — one complete spoken line, assembled per response id so
+ *    concurrent judgments and late deltas from a cancelled response can never splice together
  *  speechStarted / speechStopped / responseState(boolean)
- *  judged({line, spoke}) — outcome of a silent initiative judgment
+ *  judged({line, spoke, kind}) — outcome of a silent judgment ('initiative' | 'proactive')
  *  probeResult(string) — reply to a copilot probe (out-of-band, never enters her context)
+ *
+ * Every response WE create carries metadata.kind ('greeting' | 'judge' | 'speak_judged' |
+ * 'probe' | 'tool_continue' | 'say' | 'image_prompt'); server-VAD replies carry none.
+ * response.done branches on that kind — matching "the next response.done" by arrival order
+ * mis-attributed judgments in real sessions (a spoken line logged as spoke=false).
  */
 export class RealtimeClient extends EventEmitter {
   private ws: WebSocket | null = null
@@ -33,10 +40,10 @@ export class RealtimeClient extends EventEmitter {
   private greeted = false
   /** Whether we are waiting on the result of a silent "should I speak" judgment */
   private pendingJudge = false
-  /** Which judgment is in flight ('initiative' | 'proactive'), echoed back in the judged event */
-  private pendingJudgeKind = 'initiative'
   /** Copilot persona override; null = the built-in ARIA_INSTRUCTIONS */
   private personaOverride: string | null = null
+  /** Transcript text accumulated per response id (see ariaLine in the class doc) */
+  private readonly transcripts = new Map<string, string>()
 
   /** extraContext: dynamic context at connect time (time, long-term memory), appended after the persona */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
@@ -98,10 +105,13 @@ export class RealtimeClient extends EventEmitter {
   requestJudgment(prompt: string, kind = 'initiative'): void {
     if (!this.isOpen || this.responseActive || this.userSpeaking || this.pendingJudge) return
     this.pendingJudge = true
-    this.pendingJudgeKind = kind
     this.send({
       type: 'response.create',
-      response: { output_modalities: ['text'], instructions: this.oneOff(prompt) }
+      response: {
+        output_modalities: ['text'],
+        metadata: { kind: 'judge', judge: kind },
+        instructions: this.oneOff(prompt)
+      }
     })
   }
 
@@ -130,7 +140,7 @@ export class RealtimeClient extends EventEmitter {
       type: 'conversation.item.create',
       item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
     })
-    this.send({ type: 'response.create' })
+    this.send({ type: 'response.create', response: { metadata: { kind: 'say' } } })
   }
 
   /**
@@ -144,7 +154,7 @@ export class RealtimeClient extends EventEmitter {
       response: {
         conversation: 'none',
         output_modalities: ['text'],
-        metadata: { kind: 'copilot_probe' },
+        metadata: { kind: 'probe' },
         instructions: question
       }
     })
@@ -157,7 +167,7 @@ export class RealtimeClient extends EventEmitter {
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output }
     })
-    this.send({ type: 'response.create' })
+    this.send({ type: 'response.create', response: { metadata: { kind: 'tool_continue' } } })
   }
 
   /** Inject a screenshot into the conversation as a user message; if respondPrompt is set, have Aria speak on it */
@@ -172,7 +182,10 @@ export class RealtimeClient extends EventEmitter {
       }
     })
     if (respondPrompt && !this.responseActive && !this.userSpeaking) {
-      this.send({ type: 'response.create', response: { instructions: this.oneOff(respondPrompt) } })
+      this.send({
+        type: 'response.create',
+        response: { metadata: { kind: 'image_prompt' }, instructions: this.oneOff(respondPrompt) }
+      })
     }
   }
 
@@ -240,7 +253,10 @@ export class RealtimeClient extends EventEmitter {
         if (!this.greeted) {
           this.greeted = true
           this.emit('status', 'Aria is online')
-          this.send({ type: 'response.create', response: { instructions: this.oneOff(GREETING_PROMPT) } })
+          this.send({
+            type: 'response.create',
+            response: { metadata: { kind: 'greeting' }, instructions: this.oneOff(GREETING_PROMPT) }
+          })
         }
         break
 
@@ -298,21 +314,28 @@ export class RealtimeClient extends EventEmitter {
       case 'response.done': {
         this.responseActive = false
         this.emit('responseState', false)
-        // Copilot probes are out-of-band; intercept them before the judge branch can mistake one for its result
-        if (ev.response?.metadata?.kind === 'copilot_probe') {
-          this.emit('probeResult', this.extractText(ev.response))
+        const resp = ev.response ?? {}
+        // A cancelled response never fires transcript.done; flush its partial as interrupted
+        this.flushTranscript(resp.id, true)
+        const kind = resp.metadata?.kind
+        if (kind === 'probe') {
+          this.emit('probeResult', this.extractText(resp))
           break
         }
-        if (this.pendingJudge) {
+        // Only the judge's own response consumes the judge state — arrival order proved unreliable
+        if (kind === 'judge' && this.pendingJudge) {
           this.pendingJudge = false
-          const line = this.extractText(ev.response)
+          const line = this.extractText(resp)
           const spoke = Boolean(line && !/^pass\b/i.test(line) && !this.userSpeaking)
-          this.emit('judged', { line, spoke, kind: this.pendingJudgeKind })
+          this.emit('judged', { line, spoke, kind: resp.metadata?.judge ?? 'initiative' })
           // She decided to speak: actually say that line out loud; on PASS do nothing
           if (spoke) {
             this.send({
               type: 'response.create',
-              response: { instructions: this.oneOff(speakJudged(line)) }
+              response: {
+                metadata: { kind: 'speak_judged' },
+                instructions: this.oneOff(speakJudged(line))
+              }
             })
           }
         }
@@ -326,11 +349,20 @@ export class RealtimeClient extends EventEmitter {
 
       case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
-        if (ev.delta) this.emit('ariaTranscriptDelta', ev.delta)
+        if (ev.delta) {
+          const id = String(ev.response_id ?? 'unknown')
+          this.transcripts.set(id, (this.transcripts.get(id) ?? '') + ev.delta)
+          this.emit('ariaTranscriptDelta', ev.delta)
+        }
         break
 
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done':
+        this.flushTranscript(
+          String(ev.response_id ?? 'unknown'),
+          false,
+          typeof ev.transcript === 'string' ? ev.transcript : undefined
+        )
         this.emit('ariaTranscriptDone')
         break
 
@@ -343,6 +375,14 @@ export class RealtimeClient extends EventEmitter {
         break
       }
     }
+  }
+
+  /** Emit one finished spoken line for a response id; `authoritative` is the API's own full transcript */
+  private flushTranscript(id: string | undefined, interrupted: boolean, authoritative?: string): void {
+    if (!id || (!this.transcripts.has(id) && !authoritative)) return
+    const text = (authoritative ?? this.transcripts.get(id) ?? '').trim()
+    this.transcripts.delete(id)
+    if (text) this.emit('ariaLine', { text, interrupted })
   }
 
   /** Extract the plain-text output from a response.done response object (used by the silent judgment) */

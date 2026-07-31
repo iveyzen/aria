@@ -7,7 +7,7 @@ import { INITIATIVE_PROMPT, PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
 import { CaptureTarget, ScreenWatcher } from './screen'
 import { ShortTermMemory } from './stm'
-import { searchWeb } from './websearch'
+import { executeTool } from './tools'
 
 const WINDOW_TITLE = 'Aria'
 
@@ -97,6 +97,31 @@ async function maybeStartSomething(): Promise<void> {
   lastActivityAt = now // Restart the timer whether or not she speaks, to avoid judging on every tick
   copilot.record('initiative_check')
   client.requestJudgment(INITIATIVE_PROMPT)
+}
+
+/** She turns her own volume knob when asked — steps the same presets the settings UI writes */
+function applyChattiness(direction: 'less' | 'more'): string {
+  const ladder: ProactivityLevel[] = ['quiet', 'balanced', 'chatty']
+  const step = direction === 'more' ? 1 : -1
+  const idx = Math.max(0, Math.min(ladder.length - 1, ladder.indexOf(cfg.proactivity) + step))
+  const level = ladder[idx]
+  const changed = level !== cfg.proactivity
+  cfg = { ...cfg, proactivity: level, ...PROACTIVITY_PRESETS[level] }
+  saveConfig(cfg)
+  if (captureTimer) startWatching()
+  unansweredInitiatives = 0
+  copilot.record('chattiness', { level, changed })
+  ui('status', `Volume: ${level}`)
+  if (!changed) {
+    return `Already at "${level}" — no ${direction === 'more' ? 'louder' : 'quieter'} setting exists.`
+  }
+  return `Now "${level}". ${
+    level === 'quiet'
+      ? 'You only speak when spoken to.'
+      : level === 'chatty'
+        ? 'You chime in freely.'
+        : 'You chime in at a relaxed pace.'
+  }`
 }
 
 /** Copilot mode: commands appended to copilot/inbox.jsonl land here */
@@ -236,20 +261,12 @@ function connect(): void {
     copilot.record('api_error', { text: msg })
     ui('status', `API error: ${msg}`)
   })
-  // Accumulate her transcript for the copilot log; a barge-in never fires ariaTranscriptDone,
-  // so the partial line is flushed (marked interrupted) when the audio gets cleared
-  let ariaLine = ''
-  const flushAriaLine = (interrupted: boolean): void => {
-    const text = ariaLine.trim()
-    ariaLine = ''
-    if (!text) return
+  client.on('audioDelta', (buf: Buffer) => win?.webContents.send('audio', buf))
+  client.on('audioClear', () => win?.webContents.send('audio-clear'))
+  // Complete spoken lines, assembled per response id inside the client (no cross-response splicing)
+  client.on('ariaLine', ({ text, interrupted }: { text: string; interrupted: boolean }) => {
     copilot.record('aria_text', interrupted ? { text, interrupted } : { text })
     stm.add('aria', interrupted ? `${text} (got cut off)` : text)
-  }
-  client.on('audioDelta', (buf: Buffer) => win?.webContents.send('audio', buf))
-  client.on('audioClear', () => {
-    flushAriaLine(true)
-    win?.webContents.send('audio-clear')
   })
   client.on('userTranscript', (t: string) => {
     lastActivityAt = Date.now()
@@ -258,14 +275,8 @@ function connect(): void {
     stm.add('user', t)
     ui('user-said', t)
   })
-  client.on('ariaTranscriptDelta', (d: string) => {
-    ariaLine += d
-    ui('aria-delta', d)
-  })
-  client.on('ariaTranscriptDone', () => {
-    flushAriaLine(false)
-    ui('aria-done')
-  })
+  client.on('ariaTranscriptDelta', (d: string) => ui('aria-delta', d))
+  client.on('ariaTranscriptDone', () => ui('aria-done'))
   client.on(
     'judged',
     ({ line, spoke, kind }: { line: string; spoke: boolean; kind?: string }) => {
@@ -293,44 +304,17 @@ function connect(): void {
         const query = String(args.query ?? '').trim()
         ui('status', `Looking up: ${query}`)
         stm.add('tool', `searched the web for "${query}"`)
-        const result = query ? await searchWeb(query) : 'No search query provided'
-        copilot.record('tool_result', { name, text: result.slice(0, 300) })
-        client?.sendFunctionResult(callId, result)
-      } else if (name === 'set_chattiness') {
-        // She turns her own volume knob when asked — same presets the settings UI writes
-        const ladder: ProactivityLevel[] = ['quiet', 'balanced', 'chatty']
-        const step = args.direction === 'more' ? 1 : -1
-        const idx = Math.max(0, Math.min(ladder.length - 1, ladder.indexOf(cfg.proactivity) + step))
-        const level = ladder[idx]
-        const changed = level !== cfg.proactivity
-        cfg = { ...cfg, proactivity: level, ...PROACTIVITY_PRESETS[level] }
-        saveConfig(cfg)
-        if (captureTimer) startWatching()
-        unansweredInitiatives = 0
-        copilot.record('chattiness', { level, changed })
-        ui('status', `Volume: ${level}`)
-        client?.sendFunctionResult(
-          callId,
-          changed
-            ? `Now "${level}". ${
-                level === 'quiet'
-                  ? 'You only speak when spoken to.'
-                  : level === 'chatty'
-                    ? 'You chime in freely.'
-                    : 'You chime in at a relaxed pace.'
-              }`
-            : `Already at "${level}" — no ${args.direction === 'more' ? 'louder' : 'quieter'} setting exists.`
-        )
-      } else if (name === 'recall_screen') {
-        client?.sendFunctionResult(callId, stm.recentScreens())
-      } else if (name === 'remember_fact') {
-        const fact = String(args.fact ?? '')
-        addFact(fact)
-        stm.add('note', `made a point of remembering: ${fact}`)
-        client?.sendFunctionResult(callId, 'Noted')
-      } else {
-        client?.sendFunctionResult(callId, `Unknown tool: ${name}`)
       }
+      const output = await executeTool(name, args, {
+        rememberFact: fact => {
+          addFact(fact)
+          stm.add('note', `made a point of remembering: ${fact}`)
+        },
+        recallScreens: () => stm.recentScreens(),
+        setChattiness: applyChattiness
+      })
+      if (name === 'search_web') copilot.record('tool_result', { name, text: output.slice(0, 300) })
+      client?.sendFunctionResult(callId, output)
     }
   )
 
