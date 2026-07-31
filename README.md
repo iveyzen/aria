@@ -13,7 +13,10 @@ and what you're doing.
 - 💬 **She starts conversations** — she doesn't wait to be spoken to. She reacts when something
   happens on screen, and when it's been quiet a while she brings something up herself. The only
   time she stays quiet is when you're visibly deep in focused work
-- 🧠 **Long-term memory** — quietly remembers what you go by, what you play, what you're watching
+- 🧠 **Two-tier memory** — a short-term queue holds everything that just happened (conversation,
+  tool use, and screens turned into text by a cheap vision caption); what falls off the end gets
+  distilled, and only the facts worth keeping — what you go by, what you play, recurring things —
+  graduate into a long-term store that grows slowly. Reconnects and restarts pick up mid-thought
 - 🧹 **Context trimming** — only the last few screenshots stay in the session; older ones are deleted
 - 🎛 **Three controls, nothing else** — mute, pick a screen, settings. That's the whole interface
 - 📝 Live subtitles and a particle orb that moves with her voice
@@ -78,7 +81,10 @@ src/main/        main process (TypeScript)
   realtime.ts    gpt-realtime-2.1 WebSocket client
   screen.ts      desktopCapturer + frame-diff detection
   persona.ts     Aria's persona and prompts  ← tune her here
-  memory.ts      long-term memory
+  stm.ts         short-term memory: event queue + screen captions
+  memory.ts      long-term memory: fact store + distiller
+  llm.ts         cheap Chat Completions client for the memory pipeline
+  copilot.ts     --copilot live tuning tap (see eval/README.md)
   config.ts      config read/write
   websearch.ts   keyless web search
 src/preload.ts   contextBridge API

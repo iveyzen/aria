@@ -2,10 +2,11 @@ import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
 import { AriaConfig, PROACTIVITY_PRESETS, loadConfig, saveConfig } from './config'
 import { Copilot, CopilotCommand } from './copilot'
-import { appendMemory, loadMemory } from './memory'
+import { addFact, memoryContext } from './memory'
 import { PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
 import { CaptureTarget, ScreenWatcher } from './screen'
+import { ShortTermMemory } from './stm'
 import { searchWeb } from './websearch'
 
 const WINDOW_TITLE = 'Aria'
@@ -14,6 +15,7 @@ let win: BrowserWindow | null = null
 let client: RealtimeClient | null = null
 let cfg: AriaConfig
 let copilot: Copilot
+const stm = new ShortTermMemory((type, data) => copilot?.record(type, data))
 const watcher = new ScreenWatcher()
 
 let watchEnabled = true
@@ -99,6 +101,7 @@ function handleCopilotCommand(c: CopilotCommand): void {
     case 'say':
       if (c.text && client?.isOpen) {
         lastActivityAt = Date.now()
+        stm.add('user', c.text)
         client.sayAsUser(c.text)
       }
       break
@@ -163,6 +166,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   }
   client.sendImage(frame.dataUrl, prompt)
   ui('looked') // The ring "takes a breath": she just took a look
+  stm.noteFrame(frame.dataUrl)
 
   const saved = copilot.saveFrame(frame.dataUrl)
   if (saved) {
@@ -186,7 +190,8 @@ function connect(): void {
   ui('state', 'connecting')
   ui('status', 'Connecting…')
 
-  client = new RealtimeClient(cfg, sessionContext(loadMemory()))
+  stm.configure(cfg.apiKey)
+  client = new RealtimeClient(cfg, sessionContext(memoryContext(), stm.recentBlock()))
   const personaOverride = copilot.loadPersonaOverride()
   if (personaOverride) client.setPersona(personaOverride)
   client.on('open', () => {
@@ -211,6 +216,7 @@ function connect(): void {
   client.on('close', ({ code, intentional }: { code: number; intentional: boolean }) => {
     stopWatching()
     stopInitiative()
+    void stm.flush() // session over: give expiring short-term lines their shot at long-term memory
     copilot.record('disconnected', { code, intentional })
     ui('state', 'disconnected')
     ui('status', intentional ? 'Disconnected' : `Connection dropped (${code}) — tap to reconnect`)
@@ -227,7 +233,9 @@ function connect(): void {
   const flushAriaLine = (interrupted: boolean): void => {
     const text = ariaLine.trim()
     ariaLine = ''
-    if (text) copilot.record('aria_text', interrupted ? { text, interrupted } : { text })
+    if (!text) return
+    copilot.record('aria_text', interrupted ? { text, interrupted } : { text })
+    stm.add('aria', interrupted ? `${text} (got cut off)` : text)
   }
   client.on('audioDelta', (buf: Buffer) => win?.webContents.send('audio', buf))
   client.on('audioClear', () => {
@@ -237,6 +245,7 @@ function connect(): void {
   client.on('userTranscript', (t: string) => {
     lastActivityAt = Date.now()
     copilot.record('user_text', { text: t })
+    stm.add('user', t)
     ui('user-said', t)
   })
   client.on('ariaTranscriptDelta', (d: string) => {
@@ -269,11 +278,14 @@ function connect(): void {
       if (name === 'search_web') {
         const query = String(args.query ?? '').trim()
         ui('status', `Looking up: ${query}`)
+        stm.add('tool', `searched the web for "${query}"`)
         const result = query ? await searchWeb(query) : 'No search query provided'
         copilot.record('tool_result', { name, text: result.slice(0, 300) })
         client?.sendFunctionResult(callId, result)
       } else if (name === 'remember_fact') {
-        appendMemory(String(args.fact ?? ''))
+        const fact = String(args.fact ?? '')
+        addFact(fact)
+        stm.add('note', `made a point of remembering: ${fact}`)
         client?.sendFunctionResult(callId, 'Noted')
       } else {
         client?.sendFunctionResult(callId, `Unknown tool: ${name}`)
@@ -288,6 +300,7 @@ app.whenReady().then(() => {
   cfg = loadConfig()
   copilot = new Copilot(app.getAppPath())
   copilot.start(handleCopilotCommand)
+  stm.load()
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(permission === 'media')
   })
@@ -339,6 +352,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   client?.close()
+  stm.saveNow() // pending lines persist to disk; the next launch distills them
   copilot?.stop()
   app.quit()
 })

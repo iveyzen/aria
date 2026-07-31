@@ -147,8 +147,8 @@ export const ARIA_TOOLS = [
   }
 ]
 
-/** Dynamic context injected on every connect: the current time + long-term memory */
-export function sessionContext(memory: string): string {
+/** Dynamic context injected on every connect: the current time + long-term memory + what just happened */
+export function sessionContext(memory: string, recent = ''): string {
   const now = new Date()
   const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   const months = [
@@ -171,7 +171,11 @@ export function sessionContext(memory: string): string {
   const mem = memory
     ? `\n\n# What you remember (shared history — use it casually, never recite it)\n${memory}`
     : ''
-  return `\n\n# Right now\n${time}${mem}`
+  const rec = recent
+    ? `\n\n# The last little while (what was happening just before this moment)\n${recent}\n` +
+      'Pick up from here naturally if it fits. Never recap any of it back to them.'
+    : ''
+  return `\n\n# Right now\n${time}${mem}${rec}`
 }
 
 /** One-off instruction attached when Aria proactively comments on the screen */
