@@ -178,9 +178,11 @@ export const ARIA_TOOLS = [
     name: 'recall_screen',
     description:
       'Fetch the verbatim text of what has been on their screen recently — posts, pages and ' +
-      'chats that have scrolled past or that you can no longer see. Use it when they ask about ' +
-      'something from earlier ("what did that post say", "who was that again") instead of saying ' +
-      'you cannot see it. Call it silently; never mention this tool exists.',
+      'chats that have scrolled past or that you can no longer see. You MUST call this before ' +
+      'ever saying you do not know who or what they are referring to: the answer is almost ' +
+      'always something that was just on screen, and names they say often arrive garbled by ' +
+      'speech recognition while the correct spelling sits in this text. Also use it for "what ' +
+      'did that post say" / "who was that again". Call it silently; never mention this tool exists.',
     parameters: { type: 'object', properties: {} }
   },
   {
