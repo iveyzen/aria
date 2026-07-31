@@ -82,7 +82,13 @@ export class RealtimeClient extends EventEmitter {
 
   /** Metadata attached to every response we create; response.done routes by it */
   private newMeta(kind: string, extra?: Record<string, unknown>): Record<string, unknown> {
-    return { kind, requestId: `g${this.generation}-${this.nextRequestId++}`, gen: this.generation, ...extra }
+    // Metadata values must be strings — the API rejects integers
+    return {
+      kind,
+      requestId: `g${this.generation}-${this.nextRequestId++}`,
+      gen: String(this.generation),
+      ...extra
+    }
   }
 
   connect(): void {
