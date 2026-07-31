@@ -63,6 +63,8 @@ export class RealtimeClient extends EventEmitter {
   private playedSamplesTotal = 0
   /** The assistant item currently streaming audio, with its window in the sample timeline */
   private currentAudioItem: { id: string; baseSamples: number; samples: number } | null = null
+  /** Judged lines being spoken, by requestId — so a cancelled speak still gets logged as discarded */
+  private readonly speakJudgedLines = new Map<string, string>()
 
   /** extraContext: dynamic context at connect time (time, long-term memory), appended after the persona */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
@@ -103,6 +105,7 @@ export class RealtimeClient extends EventEmitter {
     this.ws.on('close', (code, reason) => {
       this.activeResponses.clear()
       this.pendingJudges.clear()
+      this.speakJudgedLines.clear()
       this.audibleResponseId = null
       this.emit('close', { code, reason: reason.toString(), intentional: this.closedByUs })
     })
@@ -418,8 +421,18 @@ export class RealtimeClient extends EventEmitter {
         if (this.activeResponses.size === 0) this.emit('responseState', false)
         if (this.audibleResponseId === respId) this.audibleResponseId = null
         // A cancelled response never fires transcript.done; flush its partial as interrupted
-        this.flushTranscript(respId, true)
+        const flushed = this.flushTranscript(respId, true)
         const kind = resp.metadata?.kind
+        if (kind === 'speak_judged') {
+          const requestId = String(resp.metadata?.requestId ?? '')
+          const line = this.speakJudgedLines.get(requestId)
+          this.speakJudgedLines.delete(requestId)
+          // Cancelled before a syllable came out: the line silently vanished — log it as discarded
+          if (line && !flushed && resp.status === 'cancelled') {
+            this.emit('lineDiscarded', { line, kind: 'speak_judged', reason: 'cancelled' })
+          }
+          break
+        }
         if (kind === 'probe') {
           this.emit('probeResult', this.extractText(resp))
           break
@@ -442,10 +455,12 @@ export class RealtimeClient extends EventEmitter {
                 reason: this.userSpeaking ? 'user-speaking' : 'response-active'
               })
             } else {
+              const speakMeta = this.newMeta('speak_judged')
+              this.speakJudgedLines.set(String(speakMeta.requestId), line)
               this.send({
                 type: 'response.create',
                 response: {
-                  metadata: this.newMeta('speak_judged'),
+                  metadata: speakMeta,
                   instructions: this.oneOff(speakJudged(line))
                 }
               })
@@ -502,11 +517,13 @@ export class RealtimeClient extends EventEmitter {
   }
 
   /** Emit one finished spoken line for a response id; `authoritative` is the API's own full transcript */
-  private flushTranscript(id: string | undefined, interrupted: boolean, authoritative?: string): void {
-    if (!id || (!this.transcripts.has(id) && !authoritative)) return
+  private flushTranscript(id: string | undefined, interrupted: boolean, authoritative?: string): boolean {
+    if (!id || (!this.transcripts.has(id) && !authoritative)) return false
     const text = (authoritative ?? this.transcripts.get(id) ?? '').trim()
     this.transcripts.delete(id)
-    if (text) this.emit('ariaLine', { text, interrupted })
+    if (!text) return false
+    this.emit('ariaLine', { text, interrupted })
+    return true
   }
 
   /** Extract the plain-text output from a response.done response object (used by the silent judgment) */
