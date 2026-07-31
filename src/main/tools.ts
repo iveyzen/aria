@@ -16,9 +16,9 @@ export interface ToolEnv {
   /** Step the volume ladder; returns the confirmation text she hears back */
   setChattiness(direction: 'less' | 'more'): string
   /** Retire a memory on request; the deletion must hold against re-derivation */
-  forgetFact(about: string): string
+  forgetFact(about: string): string | Promise<string>
   /** Replace a wrong memory with the corrected one */
-  correctFact(oldRef: string, newFact: string): string
+  correctFact(oldRef: string, newFact: string): string | Promise<string>
   /** Never store anything about this topic again; retires existing matches */
   blockTopic(topic: string): string
   /** Override the real web search (eval may want it deterministic) */

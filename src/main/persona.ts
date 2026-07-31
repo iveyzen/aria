@@ -170,8 +170,9 @@ export const ARIA_TOOLS = [
     name: 'forget_fact',
     description:
       'Erase one of your long-term memories when they ask you to forget something. It stays ' +
-      'forgotten — it will not sneak back later. Acknowledge in a couple of words, and never ' +
-      'claim you forgot something if the tool says nothing matched.',
+      'forgotten — it will not sneak back later. Refer to the memory using the wording you ' +
+      'stored it with when you know it (their phrasing may be in another language). Acknowledge ' +
+      'in a couple of words, and never claim you forgot something if the tool says nothing matched.',
     parameters: {
       type: 'object',
       properties: {

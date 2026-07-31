@@ -99,9 +99,25 @@ function matches(a: string, b: string): boolean {
   return na === nb || na.includes(nb) || nb.includes(na)
 }
 
+const TOPIC_STOPWORDS = new Set([
+  'and', 'or', 'the', 'my', 'our', 'a', 'an', 'of', 'about', 'stuff', 'things', 'any', 'all'
+])
+
+/** Significant words of a topic phrase; latin words matched by crude stem prefix (invest~) */
+function topicWords(topic: string): string[] {
+  return normalize(topic)
+    .split(/\s+/)
+    .filter(w => w.length >= 2 && !TOPIC_STOPWORDS.has(w))
+    .map(w => (/^[a-z0-9]+$/.test(w) ? w.slice(0, Math.max(4, Math.min(6, w.length))) : w))
+}
+
 function isBlockedTopic(fact: string): string | null {
   const nf = normalize(fact)
-  for (const topic of blockedTopics) if (topic && nf.includes(topic)) return topic
+  for (const topic of blockedTopics) {
+    const words = topicWords(topic)
+    // ANY significant word hit blocks — overblocking is the privacy-safe direction
+    if (words.length && words.some(w => nf.includes(w))) return topic
+  }
   return null
 }
 
@@ -141,9 +157,48 @@ export function forgetFact(about: string): string | null {
   return target.fact
 }
 
+/**
+ * String match first; if that misses, a cheap model PICKS the fact (live finding: she stores
+ * facts in English, the user refers to them in Chinese — "我喝什么咖啡" can never substring-match
+ * "iced Americano"). The model only chooses; retirement itself stays deterministic.
+ */
+export async function forgetFactSmart(about: string, apiKey?: string): Promise<string | null> {
+  const direct = forgetFact(about)
+  if (direct || !apiKey) return direct
+  const facts = load().filter(isActive)
+  if (!facts.length) return null
+  try {
+    const out = await chatJson(apiKey, MEMORY_MODEL, [
+      {
+        role: 'system',
+        content:
+          'Pick which stored memory the user is referring to. Reply {"index": <number>} or ' +
+          '{"index": null} if none clearly matches. The reference may be in a different ' +
+          'language than the memory.'
+      },
+      {
+        role: 'user',
+        content: `Reference: "${about}"\n\nMemories:\n${facts.map((f, i) => `${i}. ${f.fact}`).join('\n')}`
+      }
+    ])
+    const idx = Number(out?.index)
+    const target = Number.isInteger(idx) ? facts[idx] : undefined
+    if (!target) return null
+    target.status = 'retired'
+    save()
+    return target.fact
+  } catch {
+    return null
+  }
+}
+
 /** Retire whatever matches the old wording and store the corrected fact (tombstone overridden) */
-export function correctFact(oldRef: string, newFact: string): { retired: string | null; outcome: AddOutcome } {
-  const retired = forgetFact(oldRef)
+export async function correctFact(
+  oldRef: string,
+  newFact: string,
+  apiKey?: string
+): Promise<{ retired: string | null; outcome: AddOutcome }> {
+  const retired = await forgetFactSmart(oldRef, apiKey)
   const outcome = addFact(newFact, 'stated', true)
   return { retired, outcome }
 }
@@ -211,8 +266,13 @@ export async function distill(
   const user =
     `Existing memories:\n${known.map((f, i) => `${i}. ${f.fact}`).join('\n') || '(none)'}` +
     `\n\nExpiring events:\n${lines.join('\n')}`
+  // The deterministic word filter is the backstop; the model hears the ban in full sentences
+  // so cross-language paraphrases get refused at generation time too
+  const blocked = blockedTopics.length
+    ? `\n\nBlocked topics — the user forbade keeping notes on these; never produce a fact touching them, in any language: ${blockedTopics.join('; ')}`
+    : ''
   const out = await chatJson(apiKey, MEMORY_MODEL, [
-    { role: 'system', content: DISTILL_SYSTEM },
+    { role: 'system', content: DISTILL_SYSTEM + blocked },
     { role: 'user', content: user }
   ])
   let added = 0

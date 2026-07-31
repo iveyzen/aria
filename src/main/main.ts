@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
 import { AriaConfig, PROACTIVITY_PRESETS, ProactivityLevel, loadConfig, saveConfig } from './config'
 import { Copilot, CopilotCommand } from './copilot'
-import { addFact, blockTopic, correctFact, forgetFact, memoryContext } from './memory'
+import { addFact, blockTopic, correctFact, forgetFactSmart, memoryContext } from './memory'
 import { PrivacyClass } from './privacy'
 import { INITIATIVE_PROMPT, PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
@@ -376,17 +376,18 @@ function connect(): void {
           }
           return outcome === 'blocked-topic'
             ? 'Not stored: they asked you never to keep notes on that topic. Do not claim you remembered it.'
-            : 'Not stored: they previously had this forgotten. Do not claim you remembered it.'
+            : 'Not stored: they previously asked you to forget this. If they really do want it ' +
+              'remembered again, check with them in a few words and then use correct_fact.'
         },
-        forgetFact: about => {
-          const removed = forgetFact(about)
+        forgetFact: async about => {
+          const removed = await forgetFactSmart(about, cfg.apiKey)
           copilot.record('memory_forget', { about, removed })
           return removed
             ? `Forgotten for good: "${removed}"`
             : 'Nothing in memory matched that. Say so honestly.'
         },
-        correctFact: (oldRef, newFact) => {
-          const r = correctFact(oldRef, newFact)
+        correctFact: async (oldRef, newFact) => {
+          const r = await correctFact(oldRef, newFact, cfg.apiKey)
           copilot.record('memory_correct', { oldRef, newFact, ...r })
           return r.retired
             ? `Corrected: dropped "${r.retired}", now remembering the new version.`
