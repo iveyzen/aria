@@ -9,12 +9,18 @@ import { searchWeb } from './websearch'
  * Hosts differ only in side effects, injected via ToolEnv.
  */
 export interface ToolEnv {
-  /** Persist a long-term fact (eval: no-op — whether she chooses to remember is itself a signal) */
-  rememberFact(fact: string): void
+  /** Persist a long-term fact; returns the result text she hears (it may honestly refuse) */
+  rememberFact(fact: string): string
   /** Verbatim text of recent screens (eval: canned) */
   recallScreens(): string
   /** Step the volume ladder; returns the confirmation text she hears back */
   setChattiness(direction: 'less' | 'more'): string
+  /** Retire a memory on request; the deletion must hold against re-derivation */
+  forgetFact(about: string): string
+  /** Replace a wrong memory with the corrected one */
+  correctFact(oldRef: string, newFact: string): string
+  /** Never store anything about this topic again; retires existing matches */
+  blockTopic(topic: string): string
   /** Override the real web search (eval may want it deterministic) */
   search?(query: string): Promise<string>
 }
@@ -29,10 +35,14 @@ export async function executeTool(
       const query = String(args.query ?? '').trim()
       return query ? await (env.search ?? searchWeb)(query) : 'No search query provided'
     }
-    case 'remember_fact': {
-      env.rememberFact(String(args.fact ?? '').trim())
-      return 'Noted'
-    }
+    case 'remember_fact':
+      return env.rememberFact(String(args.fact ?? '').trim())
+    case 'forget_fact':
+      return env.forgetFact(String(args.about ?? '').trim())
+    case 'correct_fact':
+      return env.correctFact(String(args.old ?? '').trim(), String(args.new ?? '').trim())
+    case 'never_remember_topic':
+      return env.blockTopic(String(args.topic ?? '').trim())
     case 'recall_screen':
       return env.recallScreens()
     case 'set_chattiness':

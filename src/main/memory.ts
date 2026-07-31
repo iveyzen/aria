@@ -18,9 +18,19 @@ export interface LtmFact {
   firstSeen: string
   lastSeen: string
   count: number
+  /**
+   * 'retired' is a tombstone, not a deletion: without it the next distill batch would
+   * resurrect the fact from old STM or screen evidence. Absent = active (backcompat).
+   */
+  status?: 'active' | 'retired'
 }
 
 let cache: LtmFact[] | null = null
+let blockedTopics: string[] = []
+
+function isActive(f: LtmFact): boolean {
+  return f.status !== 'retired'
+}
 
 function ltmPath(): string {
   return path.join(app.getPath('userData'), 'aria-ltm.json')
@@ -37,6 +47,7 @@ function load(): LtmFact[] {
     const parsed = JSON.parse(fs.readFileSync(ltmPath(), 'utf8'))
     if (Array.isArray(parsed?.facts)) {
       cache = parsed.facts
+      blockedTopics = Array.isArray(parsed?.blockedTopics) ? parsed.blockedTopics : []
       return cache!
     }
   } catch {
@@ -66,7 +77,11 @@ function migrateLegacy(): LtmFact[] {
 
 function save(): void {
   try {
-    fs.writeFileSync(ltmPath(), JSON.stringify({ facts: load() }, null, 2), 'utf8')
+    fs.writeFileSync(
+      ltmPath(),
+      JSON.stringify({ facts: load(), blockedTopics }, null, 2),
+      'utf8'
+    )
   } catch {
     // A failed save loses nothing until quit; the next save retries
   }
@@ -76,20 +91,78 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 }
 
-/** Add a fact, or reinforce it if it's already known (near-exact match) */
-export function addFact(fact: string, category = 'stated'): void {
+/** Loose match: same normalized text, or one contains the other (for spoken references) */
+function matches(a: string, b: string): boolean {
+  const na = normalize(a)
+  const nb = normalize(b)
+  if (!na || !nb) return false
+  return na === nb || na.includes(nb) || nb.includes(na)
+}
+
+function isBlockedTopic(fact: string): string | null {
+  const nf = normalize(fact)
+  for (const topic of blockedTopics) if (topic && nf.includes(topic)) return topic
+  return null
+}
+
+export type AddOutcome = 'stored' | 'reinforced' | 'blocked-topic' | 'blocked-tombstone'
+
+/**
+ * Add a fact, or reinforce it if it's already known. Refuses facts on blocked topics and
+ * facts matching a tombstone — the user's deletions must hold against re-derivation.
+ * `explicit` (a direct user correction) may override a tombstone, never a blocked topic.
+ */
+export function addFact(fact: string, category = 'stated', explicit = false): AddOutcome {
   const clean = fact.replace(/\s+/g, ' ').trim()
-  if (!clean) return
+  if (!clean) return 'blocked-topic'
   const facts = load()
-  const norm = normalize(clean)
-  const existing = facts.find(f => normalize(f.fact) === norm)
-  if (existing) {
-    existing.count++
-    existing.lastSeen = today()
-  } else {
-    facts.push({ fact: clean, category, firstSeen: today(), lastSeen: today(), count: 1 })
+  if (isBlockedTopic(clean)) return 'blocked-topic'
+  const active = facts.find(f => isActive(f) && normalize(f.fact) === normalize(clean))
+  if (active) {
+    active.count++
+    active.lastSeen = today()
+    save()
+    return 'reinforced'
+  }
+  const tombstone = facts.find(f => !isActive(f) && matches(f.fact, clean))
+  if (tombstone && !explicit) return 'blocked-tombstone'
+  facts.push({ fact: clean, category, firstSeen: today(), lastSeen: today(), count: 1, status: 'active' })
+  save()
+  return 'stored'
+}
+
+/** Retire the best-matching active fact; returns its text, or null if nothing matched */
+export function forgetFact(about: string): string | null {
+  const facts = load()
+  const target = facts.find(f => isActive(f) && matches(f.fact, about))
+  if (!target) return null
+  target.status = 'retired'
+  save()
+  return target.fact
+}
+
+/** Retire whatever matches the old wording and store the corrected fact (tombstone overridden) */
+export function correctFact(oldRef: string, newFact: string): { retired: string | null; outcome: AddOutcome } {
+  const retired = forgetFact(oldRef)
+  const outcome = addFact(newFact, 'stated', true)
+  return { retired, outcome }
+}
+
+/** Never remember anything about this topic again; retires existing matches too */
+export function blockTopic(topic: string): number {
+  const clean = normalize(topic)
+  if (!clean) return 0
+  if (!blockedTopics.includes(clean)) blockedTopics.push(clean)
+  const facts = load()
+  let retired = 0
+  for (const f of facts) {
+    if (isActive(f) && normalize(f.fact).includes(clean)) {
+      f.status = 'retired'
+      retired++
+    }
   }
   save()
+  return retired
 }
 
 /**
@@ -97,7 +170,7 @@ export function addFact(fact: string, category = 'stated'): void {
  * coming up — frequency buys a memory its spot even after recency has expired.
  */
 export function memoryContext(max = 40): string {
-  const facts = load()
+  const facts = load().filter(isActive)
   if (!facts.length) return ''
   const sorted = [...facts].sort(
     (a, b) => b.lastSeen.localeCompare(a.lastSeen) || b.count - a.count
@@ -132,8 +205,9 @@ export async function distill(
   apiKey: string
 ): Promise<{ added: number; reinforced: number }> {
   const facts = load()
-  // The most recently added memories are the dedup context; a numbered list keeps reinforce references unambiguous
-  const known = facts.slice(-80)
+  // The most recently added ACTIVE memories are the dedup context; retired facts stay out of
+  // the model's sight entirely — a tombstone the model can see is a fact it can re-propose
+  const known = facts.filter(isActive).slice(-80)
   const user =
     `Existing memories:\n${known.map((f, i) => `${i}. ${f.fact}`).join('\n') || '(none)'}` +
     `\n\nExpiring events:\n${lines.join('\n')}`

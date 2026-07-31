@@ -137,7 +137,10 @@ export class EvalAriaClient {
   private async execTool(name: string, args: Record<string, unknown>): Promise<string> {
     return executeTool(name, args, {
       // Not persisted to disk in evals — acknowledging is enough (whether she chooses to remember is itself a scoring signal)
-      rememberFact: () => {},
+      rememberFact: () => 'Noted',
+      forgetFact: about => `Forgotten for good: "${about}"`,
+      correctFact: (_old, newFact) => `Corrected: now remembering "${newFact}".`,
+      blockTopic: () => 'Understood — no notes on that topic ever again (1 existing erased).',
       recallScreens: () => 'No screen text recorded yet.',
       setChattiness: direction =>
         direction === 'less'

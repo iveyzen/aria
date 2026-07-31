@@ -167,6 +167,49 @@ export const ARIA_TOOLS = [
   },
   {
     type: 'function',
+    name: 'forget_fact',
+    description:
+      'Erase one of your long-term memories when they ask you to forget something. It stays ' +
+      'forgotten — it will not sneak back later. Acknowledge in a couple of words, and never ' +
+      'claim you forgot something if the tool says nothing matched.',
+    parameters: {
+      type: 'object',
+      properties: {
+        about: { type: 'string', description: 'What to forget, in their words' }
+      },
+      required: ['about']
+    }
+  },
+  {
+    type: 'function',
+    name: 'correct_fact',
+    description:
+      'Fix a memory they say is wrong: the old version is erased, the corrected one is kept.',
+    parameters: {
+      type: 'object',
+      properties: {
+        old: { type: 'string', description: 'The wrong memory, roughly as they referred to it' },
+        new: { type: 'string', description: 'The corrected fact, one sentence, third person' }
+      },
+      required: ['old', 'new']
+    }
+  },
+  {
+    type: 'function',
+    name: 'never_remember_topic',
+    description:
+      'Call when they tell you to never keep notes on a topic ("别记我的钱的事"). Existing ' +
+      'memories on that topic are erased too, and nothing about it will be stored again.',
+    parameters: {
+      type: 'object',
+      properties: {
+        topic: { type: 'string', description: 'The off-limits topic, a short phrase' }
+      },
+      required: ['topic']
+    }
+  },
+  {
+    type: 'function',
     name: 'set_chattiness',
     description:
       'Turn how much you speak up on your own up or down one notch. Call IMMEDIATELY when they ' +

@@ -2,7 +2,8 @@ import { app, BrowserWindow, ipcMain, session } from 'electron'
 import * as path from 'path'
 import { AriaConfig, PROACTIVITY_PRESETS, ProactivityLevel, loadConfig, saveConfig } from './config'
 import { Copilot, CopilotCommand } from './copilot'
-import { addFact, memoryContext } from './memory'
+import { addFact, blockTopic, correctFact, forgetFact, memoryContext } from './memory'
+import { PrivacyClass } from './privacy'
 import { INITIATIVE_PROMPT, PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
 import { CaptureTarget, ScreenWatcher } from './screen'
@@ -17,12 +18,23 @@ let cfg: AriaConfig
 let copilot: Copilot
 /** What the ASR is currently biased with; used to catch the hint bleeding back out as fake speech */
 let lastHintText = ''
+/** Privacy class of the most recent classified frame; gates proactivity (see privacy.ts) */
+let screenPrivacy: PrivacyClass = 'normal'
 const stm = new ShortTermMemory((type, data) => {
   copilot?.record(type, data)
-  // Fresh screen text doubles as an ASR vocabulary hint: the names they'll say are the names they see
-  if ((type === 'screen_text' || type === 'screen_ocr') && typeof data.text === 'string') {
-    lastHintText = data.text.replace(/\s+/g, '')
-    client?.setTranscriptionHint(data.text)
+  if (type === 'screen_privacy') {
+    screenPrivacy = data.privacy as PrivacyClass
+    // A sensitive/secret verdict arrives after the copilot frame was saved — take it back
+    if ((screenPrivacy === 'sensitive' || screenPrivacy === 'secret') && typeof data.framePath === 'string') {
+      copilot?.deleteFrame(data.framePath)
+    }
+  }
+  // Fresh screen text doubles as an ASR vocabulary hint: the names they'll say are the names
+  // they see. hintText is only attached for normal/personal screens — balances and secrets
+  // must never live in the transcription prompt.
+  if ((type === 'screen_text' || type === 'screen_ocr') && typeof data.hintText === 'string') {
+    lastHintText = data.hintText.replace(/\s+/g, '')
+    client?.setTranscriptionHint(data.hintText)
   }
 })
 
@@ -106,6 +118,7 @@ async function maybeStartSomething(): Promise<void> {
   if (!client?.isOpen) return
   if (!cfg.proactive || cfg.idleInitiativeMs <= 0) return
   if (client.isResponding || client.isUserSpeaking) return
+  if (screenPrivacy === 'sensitive' || screenPrivacy === 'secret') return
 
   const now = Date.now()
   // Unanswered self-started lines stretch the wait: a friend who got no reply twice stops pushing
@@ -208,6 +221,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   const wantProactive =
     !respondPrompt &&
     cfg.proactive &&
+    screenPrivacy === 'normal' &&
     frame.diff >= cfg.proactiveDiffThreshold &&
     // Unanswered self-started lines stretch the cooldown too — same back-off as idle initiative
     now - lastProactiveAt >= cfg.proactiveCooldownMs * Math.min(backoffCap(), 1 + unansweredInitiatives) &&
@@ -218,7 +232,6 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
 
   client.sendImage(frame.dataUrl, respondPrompt)
   ui('looked') // The ring "takes a breath": she just took a look
-  stm.noteFrame(frame.ocrDataUrl ?? frame.dataUrl)
 
   // Big change: judged, not spoken directly — app switches must be able to PASS silently
   if (wantProactive) {
@@ -235,6 +248,11 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
       prompted: Boolean(respondPrompt) || wantProactive
     })
   }
+  stm.noteFrame(frame.ocrDataUrl ?? frame.dataUrl, {
+    sourceApp: watcher.currentTarget?.name ?? 'primary screen',
+    captureId: String(frame.capturedAt),
+    framePath: saved
+  })
 }
 
 function connect(): void {
@@ -339,9 +357,37 @@ function connect(): void {
         stm.add('tool', `searched the web for "${query}"`)
       }
       const output = await executeTool(name, args, {
+        // Honesty rule (design-principles §4): she must never claim to have remembered or
+        // forgotten something the store actually refused — the result text tells the truth.
         rememberFact: fact => {
-          addFact(fact)
-          stm.add('note', `made a point of remembering: ${fact}`)
+          const outcome = addFact(fact)
+          copilot.record('memory_write', { fact, outcome })
+          if (outcome === 'stored' || outcome === 'reinforced') {
+            stm.add('note', `made a point of remembering: ${fact}`)
+            return 'Noted'
+          }
+          return outcome === 'blocked-topic'
+            ? 'Not stored: they asked you never to keep notes on that topic. Do not claim you remembered it.'
+            : 'Not stored: they previously had this forgotten. Do not claim you remembered it.'
+        },
+        forgetFact: about => {
+          const removed = forgetFact(about)
+          copilot.record('memory_forget', { about, removed })
+          return removed
+            ? `Forgotten for good: "${removed}"`
+            : 'Nothing in memory matched that. Say so honestly.'
+        },
+        correctFact: (oldRef, newFact) => {
+          const r = correctFact(oldRef, newFact)
+          copilot.record('memory_correct', { oldRef, newFact, ...r })
+          return r.retired
+            ? `Corrected: dropped "${r.retired}", now remembering the new version.`
+            : 'No old memory matched, stored the corrected version as new.'
+        },
+        blockTopic: topic => {
+          const retired = blockTopic(topic)
+          copilot.record('memory_block_topic', { topic, retired })
+          return `Understood — no notes on that topic ever again (${retired} existing erased).`
         },
         recallScreens: () => stm.recentScreens(),
         setChattiness: applyChattiness

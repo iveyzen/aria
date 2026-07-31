@@ -104,10 +104,11 @@ Agreed with external review (2026-07-31), in order — correctness before clever
 - [ ] **Response protocol model**: every self-created response tracked by id + metadata end to
   end; true barge-in via `conversation.item.truncate` at the ms the user actually heard (today
   only the local playback buffer is cleared, so her context keeps speech that was never heard)
-- [ ] **STM envelope + privacy classes**: events carry speaker/sourceApp/privacy/confidence/
+- [x] **STM envelope + privacy classes**: events carry speaker/sourceApp/privacy/confidence/
   contentHash; screen memory becomes latestScreenState per window + local line-diff events
   (no model-side delta transcription); four privacy tiers — sensitive pages get no proactive,
-  no persistence, masked frames; capacity by token budget, not event count
+  no persistence, frames retro-deleted; capacity by character budget, not event count; LTM
+  deletions hold via tombstones (forget_fact / correct_fact / never_remember_topic)
 - [ ] **Session replay eval**: the recorded copilot JSONLs become timeline test assets —
   deterministic metrics (initiations/hour, semantic repetition, pre-search narration, truncate
   residue), 2-4 min episode judges, whole-session pairwise A/B; headline metric: "first moment

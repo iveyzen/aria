@@ -4,52 +4,100 @@ import * as path from 'path'
 import { MEMORY_MODEL, chatText } from './llm'
 import { distill } from './memory'
 import { ocrImage } from './ocr'
+import { classifyScreen } from './privacy'
 
 /**
- * Short-term memory: a fixed-length queue of everything that just happened, as plain text —
- * both sides of the conversation, tool use, and screen captions (frames turned into words by
- * a cheap vision call, since images can't be kept and text can).
+ * Short-term memory: a budgeted queue of everything that just happened, as enveloped text
+ * events — both sides of the conversation, tool use, and screen text.
  *
- * Two jobs: the tail is injected at session start so she has continuity across reconnects and
- * restarts, and whatever falls off the front is batched through the distiller (memory.ts),
- * which decides what little of it becomes long-term memory.
+ * Envelope over raw text (design-principles.md): every event carries provenance (speaker,
+ * sourceApp, capture, confidence, privacy) and a content hash. Structure the provenance and
+ * lifecycle, not the semantics.
+ *
+ * Screen memory is split: `latestScreens` holds the current full transcription per source;
+ * the queue only receives the lines that are NEW versus that state (local diff — never
+ * model-side delta transcription, which can permanently lose whatever one call skips).
+ * Sensitive/secret screens never persist at all.
+ *
+ * Jobs: the tail is injected at session start (continuity across reconnects/restarts), the
+ * recall_screen tool reads the current states, and whatever falls off the front is batched
+ * through the distiller (memory.ts).
  */
 
 export type StmKind = 'user' | 'aria' | 'screen' | 'tool' | 'note'
 
 export interface StmEvent {
+  id: string
   t: number
   kind: StmKind
+  speaker: 'user' | 'aria' | 'screen-author' | 'system'
+  sourceApp?: string
+  captureId?: string
+  /** sensitive/secret content never enters the queue, so only these two appear */
+  privacy: 'normal' | 'personal'
+  /** ASR and OCR are lossy → low; verbatim vision transcription → high */
+  confidence: 'high' | 'low'
   text: string
+  hash: string
 }
 
-const STM_MAX = 150 // queue length — roughly an hour of lively session
+export interface FrameMeta {
+  sourceApp: string
+  captureId?: string
+  /** Copilot frame file for this capture, so a sensitive verdict can delete it retroactively */
+  framePath?: string | null
+}
+
+/** Capacity is a character budget (≈ tokens·3), not an event count; screens get a sub-quota */
+const CHAR_BUDGET_TOTAL = 36_000
+const CHAR_BUDGET_SCREEN = 22_000
 const DISTILL_BATCH = 40 // evicted lines per distillation call
 const FLUSH_MIN = 8 // don't distill scraps smaller than this on disconnect; they persist to next time
-const SCREEN_TEXT_GAP_MS = 10_000 // OCR is local and free; this just keeps STM from drowning in near-duplicates
-const SCREEN_TEXT_MAX = 900 // a full page of tweets is a lot of line; cap what one frame may occupy
+const SCREEN_TEXT_GAP_MS = 10_000
+const SCREEN_TEXT_MAX = 900 // cap on one frame's NEW text in the queue
+const HINT_MAX = 1_600 // cap on the full-state text kept for ASR hinting and the journal
 const SAVE_DEBOUNCE_MS = 2_000
 
 const TRANSCRIBE_PROMPT =
   'You are the eyes of a companion AI watching a friend\'s screen. Transcribe the readable ' +
-  'content of this screen verbatim, in reading order, as compact plain text. Keep names, handles, ' +
-  'numbers and titles exactly as written. Skip window chrome, menus, icons and ads. If there is ' +
-  'little or no text (a game scene, a video), instead say in one or two telegraphic lines what app ' +
-  'or game this is and what is happening. No commentary, no speculation.'
+  'content of this screen verbatim, in reading order, one line per visual line or post. Keep ' +
+  'names, handles, numbers and titles exactly as written. Skip window chrome, menus, icons and ' +
+  'ads. If there is little or no text (a game scene, a video), instead say in one or two ' +
+  'telegraphic lines what app or game this is and what is happening. No commentary, no speculation.'
+
+function contentHash(s: string): string {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return (h >>> 0).toString(36)
+}
+
+const SPEAKER: Record<StmKind, StmEvent['speaker']> = {
+  user: 'user',
+  aria: 'aria',
+  screen: 'screen-author',
+  tool: 'system',
+  note: 'system'
+}
 
 export class ShortTermMemory {
   private events: StmEvent[] = []
   private pending: string[] = [] // evicted lines awaiting distillation; persisted, so quitting loses nothing
+  /** Current full transcription per source, most recently updated last (re-inserted on update) */
+  private readonly latestScreens = new Map<string, string>()
   private apiKey = ''
   private lastCaptionAt = 0
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private distilling = false
+  private seq = 1
 
   constructor(
     private readonly log: (type: string, data: Record<string, unknown>) => void = () => {}
   ) {}
 
-  /** Set at connect time; without a key the queue still works, captions and distillation just skip */
+  /** Set at connect time; without a key the queue still works, transcription and distillation just skip */
   configure(apiKey: string): void {
     this.apiKey = apiKey
   }
@@ -61,7 +109,23 @@ export class ShortTermMemory {
   load(): void {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.file(), 'utf8'))
-      if (Array.isArray(parsed?.events)) this.events = parsed.events
+      if (Array.isArray(parsed?.events)) {
+        // Migrate pre-envelope events in place
+        this.events = parsed.events
+          .filter((e: any) => e && typeof e.text === 'string' && e.text)
+          .map((e: any, i: number) => ({
+            id: typeof e.id === 'string' ? e.id : `m${i}`,
+            t: Number(e.t) || Date.now(),
+            kind: (e.kind ?? 'note') as StmKind,
+            speaker: e.speaker ?? SPEAKER[(e.kind ?? 'note') as StmKind],
+            sourceApp: e.sourceApp,
+            captureId: e.captureId,
+            privacy: e.privacy === 'personal' ? 'personal' : 'normal',
+            confidence: e.confidence === 'low' ? 'low' : 'high',
+            text: e.text,
+            hash: typeof e.hash === 'string' ? e.hash : contentHash(e.text)
+          }))
+      }
       if (Array.isArray(parsed?.pending)) this.pending = parsed.pending
     } catch {
       // First run
@@ -88,15 +152,51 @@ export class ShortTermMemory {
     }, SAVE_DEBOUNCE_MS)
   }
 
-  add(kind: StmKind, text: string, t = Date.now()): void {
+  add(
+    kind: StmKind,
+    text: string,
+    opts: Partial<Pick<StmEvent, 't' | 'privacy' | 'confidence' | 'sourceApp' | 'captureId'>> = {}
+  ): void {
     const clean = text.replace(/\s+/g, ' ').trim()
     if (!clean) return
-    this.events.push({ t, kind, text: clean })
-    while (this.events.length > STM_MAX) {
-      this.pending.push(this.line(this.events.shift()!))
-    }
+    const hash = contentHash(clean)
+    // Exact repeat of the latest event of the same kind (ASR double-fire, unchanged screen): skip
+    const last = [...this.events].reverse().find(e => e.kind === kind)
+    if (last?.hash === hash) return
+    this.events.push({
+      id: `e${this.seq++}`,
+      t: opts.t ?? Date.now(),
+      kind,
+      speaker: SPEAKER[kind],
+      sourceApp: opts.sourceApp,
+      captureId: opts.captureId,
+      privacy: opts.privacy ?? 'normal',
+      confidence: opts.confidence ?? 'high',
+      text: clean,
+      hash
+    })
+    this.evictToBudget()
     if (this.pending.length >= DISTILL_BATCH) void this.distillPending(DISTILL_BATCH)
     this.scheduleSave()
+  }
+
+  private evictToBudget(): void {
+    const chars = (pred: (e: StmEvent) => boolean) =>
+      this.events.reduce((n, e) => (pred(e) ? n + e.text.length : n), 0)
+    const evictOldest = (pred: (e: StmEvent) => boolean) => {
+      const idx = this.events.findIndex(pred)
+      if (idx < 0) return false
+      this.pending.push(this.line(this.events[idx]))
+      this.events.splice(idx, 1)
+      return true
+    }
+    // Screens have a sub-quota so a chatty feed can't squeeze out the conversation
+    while (chars(e => e.kind === 'screen') > CHAR_BUDGET_SCREEN) {
+      if (!evictOldest(e => e.kind === 'screen')) break
+    }
+    while (chars(() => true) > CHAR_BUDGET_TOTAL) {
+      if (!evictOldest(() => true)) break
+    }
   }
 
   /** Whether the next frame would be turned into screen text (lets the capturer skip full-res work otherwise) */
@@ -105,26 +205,22 @@ export class ShortTermMemory {
   }
 
   /**
-   * A frame was just sent to Aria: turn it into a text memory too (throttled).
-   * Verbatim first — Windows OCR reads rendered text word for word, which beats any summary
-   * (a summarized tweet loses exactly the names and numbers she later gets asked about).
-   * Only text-poor scenes (games, video) fall back to a vision caption.
-   * Fire-and-forget — the text lands in the queue seconds later, stamped with capture time.
+   * A frame was just sent to Aria: classify it, then remember only what is NEW versus the
+   * current state of that source. Fire-and-forget; text lands stamped with capture time.
    */
-  noteFrame(dataUrl: string): void {
+  noteFrame(dataUrl: string, meta: FrameMeta): void {
     const now = Date.now()
     if (now - this.lastCaptionAt < SCREEN_TEXT_GAP_MS) return
     this.lastCaptionAt = now
-    void this.frameToText(dataUrl, now)
+    void this.frameToText(dataUrl, now, meta)
   }
 
-  private lastScreenText = ''
-
-  private async frameToText(dataUrl: string, t: number): Promise<void> {
-    // Primary: a nano vision model transcribing verbatim — it keeps reading order, skips icon
-    // chrome, and handles mixed CJK/latin where raw OCR falls apart
+  private async frameToText(dataUrl: string, t: number, meta: FrameMeta): Promise<void> {
+    // Primary: a nano vision model transcribing verbatim — reading order, chrome skipped,
+    // mixed CJK/latin intact. Fallback: local Windows OCR (lossy → low confidence).
     let text = ''
     let source = 'screen_text'
+    let confidence: StmEvent['confidence'] = 'high'
     if (this.apiKey) {
       try {
         text = (
@@ -143,29 +239,73 @@ export class ShortTermMemory {
       }
     }
     if (!text) {
-      // No key or the call failed: the free local OCR still beats remembering nothing.
-      // Windows OCR spaces CJK glyph by glyph ("很 大 的 橙 子"); merge those gaps back into words.
       source = 'screen_ocr'
+      confidence = 'low'
       text = (await ocrImage(dataUrl))
-        .replace(/\s+/g, ' ')
+        .replace(/[ \t]+/g, ' ')
         .replace(/(?<=[　-鿿＀-￯])\s+(?=[　-鿿＀-￯])/g, '')
         .trim()
     }
-    text = text.replace(/\s+/g, ' ').slice(0, SCREEN_TEXT_MAX)
-    if (!text || text === this.lastScreenText) return // an unchanged screen isn't a new memory
-    this.lastScreenText = text
-    this.add('screen', text, t)
-    this.log(source, { text })
+    if (!text) return
+
+    const verdict = classifyScreen(meta.sourceApp, text)
+    // Always surfaced — main gates proactivity and deletes the copilot frame off this event
+    this.log('screen_privacy', { ...verdict, sourceApp: meta.sourceApp, framePath: meta.framePath ?? null })
+    if (verdict.privacy === 'sensitive' || verdict.privacy === 'secret') {
+      // She may have glanced (transient context in the live session); nothing persists here.
+      this.log('screen_redacted', { sourceApp: meta.sourceApp, privacy: verdict.privacy })
+      return
+    }
+
+    // Local line-level diff against the current state of this source: only novel lines enter
+    // the queue. The full state is kept for recall and ASR hinting.
+    const lines = text
+      .split('\n')
+      .map(l => l.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+    const prev = new Set(
+      (this.latestScreens.get(meta.sourceApp) ?? '')
+        .split('\n')
+        .map(l => l.trim())
+        .filter(Boolean)
+    )
+    const full = lines.join('\n').slice(0, HINT_MAX)
+    this.latestScreens.delete(meta.sourceApp) // re-insert so Map order tracks recency
+    this.latestScreens.set(meta.sourceApp, full)
+    const novel = lines.filter(l => !prev.has(l))
+    if (!novel.length) return
+
+    const privacy = verdict.privacy === 'personal' ? 'personal' : 'normal'
+    this.add('screen', novel.join(' | ').slice(0, SCREEN_TEXT_MAX), {
+      t,
+      privacy,
+      confidence,
+      sourceApp: meta.sourceApp,
+      captureId: meta.captureId
+    })
+    this.log(source, {
+      text: novel.join(' | ').slice(0, SCREEN_TEXT_MAX),
+      full,
+      sourceApp: meta.sourceApp,
+      privacy,
+      hintText: full
+    })
   }
 
   /**
-   * The last few screens as verbatim text, for the recall_screen tool — her own context only
-   * keeps a handful of images, so "what did that post say again" needs this paper trail.
+   * recall_screen: the current full state of the most recent sources, plus what scrolled past.
    */
-  recentScreens(n = 15): string {
-    const screens = this.events.filter(ev => ev.kind === 'screen').slice(-n)
-    if (!screens.length) return 'No screen text recorded yet.'
-    return screens.map(ev => this.line(ev)).join('\n')
+  recentScreens(): string {
+    const parts: string[] = []
+    const states = [...this.latestScreens.entries()].slice(-2).reverse()
+    for (const [src, full] of states) {
+      parts.push(`— ${src} (current) —\n${full.slice(0, 1200)}`)
+    }
+    const deltas = this.events.filter(e => e.kind === 'screen').slice(-10)
+    if (deltas.length) {
+      parts.push('— earlier fragments —\n' + deltas.map(e => this.line(e)).join('\n'))
+    }
+    return parts.length ? parts.join('\n') : 'No screen text recorded yet.'
   }
 
   /**
@@ -191,13 +331,13 @@ export class ShortTermMemory {
   private line(ev: StmEvent): string {
     const d = new Date(ev.t)
     const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-    const tag: Record<StmKind, string> = {
-      user: 'they',
-      aria: 'you',
-      screen: 'screen',
-      tool: 'you',
-      note: 'note'
+    if (ev.kind === 'screen') {
+      const marks = [ev.sourceApp, ev.privacy === 'personal' ? 'personal' : '', ev.confidence === 'low' ? 'blurry' : '']
+        .filter(Boolean)
+        .join(', ')
+      return `[${hhmm}] screen(${marks}): ${ev.text}`
     }
+    const tag: Record<StmKind, string> = { user: 'they', aria: 'you', screen: 'screen', tool: 'you', note: 'note' }
     return `[${hhmm}] ${tag[ev.kind]}: ${ev.text}`
   }
 

@@ -83,6 +83,12 @@ export class Copilot {
     return rel
   }
 
+  /** Remove a saved frame (privacy classification arrived after the save and said no) */
+  deleteFrame(rel: string): void {
+    if (!this.enabled || !rel.startsWith('frames/')) return
+    fs.rm(path.join(this.dir, rel), { force: true }, () => {})
+  }
+
   /** Read copilot/persona.md; null = absent or empty → the built-in persona applies */
   loadPersonaOverride(): string | null {
     if (!this.enabled) return null
