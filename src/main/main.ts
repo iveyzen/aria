@@ -181,7 +181,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
       file: saved,
       diff: Number(frame.diff.toFixed(3)),
       forced,
-      prompted: Boolean(prompt)
+      prompted: Boolean(respondPrompt) || wantProactive
     })
   }
 }
