@@ -3,6 +3,16 @@
 Agreed with external review 2026-07-31 (baseline commit `4a0fd95`). This is the next major
 work block; persona text is frozen until the replay evaluation exists.
 
+**Status: implemented** (same evening). All acceptance criteria below are code-complete;
+pending live voice validation. Known approximations, on record:
+- Playback position reports every ~120ms, so a truncate can be up to ~120ms conservative
+  (context keeps slightly less than heard — the safe direction).
+- STM stores the full generated text of an interrupted line with a "(got cut off)" marker;
+  the heard-vs-generated split lives in the copilot log (`truncated` + `aria_text.outcome`),
+  since text can't be cut at a millisecond boundary.
+- `isResponding` counts out-of-band responses too (pre-existing semantics, kept deliberately:
+  a silent judge showing as "thinking" reads as natural pausing).
+
 ## Acceptance criteria (from review, verbatim intent)
 
 - Every response carries `response_id + kind + requestId + sessionGeneration`.

@@ -23,27 +23,46 @@ import {
  *    concurrent judgments and late deltas from a cancelled response can never splice together
  *  speechStarted / speechStopped / responseState(boolean)
  *  judged({line, spoke, kind}) — outcome of a silent judgment ('initiative' | 'proactive')
+ *  lineDiscarded({line, kind, reason}) — a judged line that was never spoken (moment passed)
+ *  truncated({itemId, heardMs, sentMs}) — barge-in cut this item; server context matches ears
  *  probeResult(string) — reply to a copilot probe (out-of-band, never enters her context)
  *
- * Every response WE create carries metadata.kind ('greeting' | 'judge' | 'speak_judged' |
- * 'probe' | 'tool_continue' | 'say' | 'image_prompt'); server-VAD replies carry none.
- * response.done branches on that kind — matching "the next response.done" by arrival order
- * mis-attributed judgments in real sessions (a spoken line logged as spoke=false).
+ * Every response WE create carries metadata {kind, requestId, gen}; server-VAD replies carry
+ * none. response.done routes by that metadata — matching "the next response.done" by arrival
+ * order mis-attributed judgments in real sessions (a spoken line logged as spoke=false).
+ * Kinds: 'greeting' | 'judge' | 'speak_judged' | 'probe' | 'tool_continue' | 'say' | 'image_prompt'.
+ *
+ * Playback accounting: the renderer reports the samples actually played; a barge-in both
+ * clears local playback AND truncates the item server-side at the ms the user really heard,
+ * so her context never keeps speech nobody received.
  */
 export class RealtimeClient extends EventEmitter {
+  private static generationCounter = 0
+  /** Distinguishes this connection — stale async work from an old session must never reach a new one */
+  readonly generation = ++RealtimeClient.generationCounter
   private ws: WebSocket | null = null
   private readonly cfg: AriaConfig
   private imageItemIds: string[] = []
-  private responseActive = false
   private userSpeaking = false
   private closedByUs = false
   private greeted = false
-  /** Whether we are waiting on the result of a silent "should I speak" judgment */
-  private pendingJudge = false
+  private nextRequestId = 1
+  /** In-flight silent judgments by requestId — concurrent judgments stay independent */
+  private readonly pendingJudges = new Map<string, string>()
+  /** All responses the server currently has in flight (default-conversation and out-of-band) */
+  private readonly activeResponses = new Set<string>()
+  /** The response currently producing audible output — the one a barge-in must cancel */
+  private audibleResponseId: string | null = null
   /** Copilot persona override; null = the built-in ARIA_INSTRUCTIONS */
   private personaOverride: string | null = null
   /** Transcript text accumulated per response id (see ariaLine in the class doc) */
   private readonly transcripts = new Map<string, string>()
+  /** Audio samples generated (sent to the renderer) since the last clear */
+  private sentSamplesTotal = 0
+  /** Audio samples actually played, as reported by the renderer (clamped to sent) */
+  private playedSamplesTotal = 0
+  /** The assistant item currently streaming audio, with its window in the sample timeline */
+  private currentAudioItem: { id: string; baseSamples: number; samples: number } | null = null
 
   /** extraContext: dynamic context at connect time (time, long-term memory), appended after the persona */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
@@ -55,10 +74,15 @@ export class RealtimeClient extends EventEmitter {
     return this.ws?.readyState === WebSocket.OPEN
   }
   get isResponding(): boolean {
-    return this.responseActive
+    return this.activeResponses.size > 0
   }
   get isUserSpeaking(): boolean {
     return this.userSpeaking
+  }
+
+  /** Metadata attached to every response we create; response.done routes by it */
+  private newMeta(kind: string, extra?: Record<string, unknown>): Record<string, unknown> {
+    return { kind, requestId: `g${this.generation}-${this.nextRequestId++}`, gen: this.generation, ...extra }
   }
 
   connect(): void {
@@ -71,7 +95,9 @@ export class RealtimeClient extends EventEmitter {
     this.ws.on('message', data => this.handleEvent(data.toString()))
     this.ws.on('error', err => this.emit('status', `Connection error: ${err.message}`))
     this.ws.on('close', (code, reason) => {
-      this.responseActive = false
+      this.activeResponses.clear()
+      this.pendingJudges.clear()
+      this.audibleResponseId = null
       this.emit('close', { code, reason: reason.toString(), intentional: this.closedByUs })
     })
   }
@@ -103,13 +129,16 @@ export class RealtimeClient extends EventEmitter {
    * a written line then gets actually spoken aloud.
    */
   requestJudgment(prompt: string, kind = 'initiative'): void {
-    if (!this.isOpen || this.responseActive || this.userSpeaking || this.pendingJudge) return
-    this.pendingJudge = true
+    if (!this.isOpen || this.isResponding || this.userSpeaking) return
+    // Different judgment kinds may coexist; identical ones would just burn tokens on the same moment
+    for (const pending of this.pendingJudges.values()) if (pending === kind) return
+    const metadata = this.newMeta('judge', { judge: kind })
+    this.pendingJudges.set(String(metadata.requestId), kind)
     this.send({
       type: 'response.create',
       response: {
         output_modalities: ['text'],
-        metadata: { kind: 'judge', judge: kind },
+        metadata,
         instructions: this.oneOff(prompt)
       }
     })
@@ -132,15 +161,54 @@ export class RealtimeClient extends EventEmitter {
   /** Copilot: inject a text message as the user and have her respond, barging in like real speech would */
   sayAsUser(text: string): void {
     if (!this.isOpen) return
-    if (this.responseActive) {
-      this.send({ type: 'response.cancel' })
-      this.emit('audioClear')
-    }
+    if (this.isResponding) this.interruptPlayback()
     this.send({
       type: 'conversation.item.create',
       item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
     })
-    this.send({ type: 'response.create', response: { metadata: { kind: 'say' } } })
+    this.send({ type: 'response.create', response: { metadata: this.newMeta('say') } })
+  }
+
+  /** The renderer's report of samples actually played since the last clear */
+  setPlaybackPosition(playedSamples: number): void {
+    // Clamp: a stale report from before a clear must not claim more was heard than was sent
+    this.playedSamplesTotal = Math.max(0, Math.min(playedSamples, this.sentSamplesTotal))
+  }
+
+  /**
+   * Barge-in: cancel the audible response, truncate the interrupted item server-side at the
+   * ms the user actually heard (else her context keeps speech nobody received), clear playback.
+   */
+  private interruptPlayback(): void {
+    this.truncateHeardAudio()
+    if (this.audibleResponseId) {
+      this.send({ type: 'response.cancel', response_id: this.audibleResponseId })
+    } else if (this.activeResponses.size) {
+      this.send({ type: 'response.cancel' })
+    }
+    this.emit('audioClear')
+    this.sentSamplesTotal = 0
+    this.playedSamplesTotal = 0
+    this.currentAudioItem = null
+  }
+
+  private truncateHeardAudio(): void {
+    const item = this.currentAudioItem
+    if (!item || !this.isOpen) return
+    const heard = Math.max(0, Math.min(this.playedSamplesTotal - item.baseSamples, item.samples))
+    if (heard >= item.samples) return // fully heard; nothing to cut
+    const heardMs = Math.floor((heard / 24000) * 1000)
+    this.send({
+      type: 'conversation.item.truncate',
+      item_id: item.id,
+      content_index: 0,
+      audio_end_ms: heardMs
+    })
+    this.emit('truncated', {
+      itemId: item.id,
+      heardMs,
+      sentMs: Math.floor((item.samples / 24000) * 1000)
+    })
   }
 
   /**
@@ -154,7 +222,7 @@ export class RealtimeClient extends EventEmitter {
       response: {
         conversation: 'none',
         output_modalities: ['text'],
-        metadata: { kind: 'probe' },
+        metadata: this.newMeta('probe'),
         instructions: question
       }
     })
@@ -167,7 +235,7 @@ export class RealtimeClient extends EventEmitter {
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output }
     })
-    this.send({ type: 'response.create', response: { metadata: { kind: 'tool_continue' } } })
+    this.send({ type: 'response.create', response: { metadata: this.newMeta('tool_continue') } })
   }
 
   /** Inject a screenshot into the conversation as a user message; if respondPrompt is set, have Aria speak on it */
@@ -181,10 +249,10 @@ export class RealtimeClient extends EventEmitter {
         content: [{ type: 'input_image', image_url: jpegDataUrl }]
       }
     })
-    if (respondPrompt && !this.responseActive && !this.userSpeaking) {
+    if (respondPrompt && !this.isResponding && !this.userSpeaking) {
       this.send({
         type: 'response.create',
-        response: { metadata: { kind: 'image_prompt' }, instructions: this.oneOff(respondPrompt) }
+        response: { metadata: this.newMeta('image_prompt'), instructions: this.oneOff(respondPrompt) }
       })
     }
   }
@@ -280,7 +348,7 @@ export class RealtimeClient extends EventEmitter {
           this.emit('status', 'Aria is online')
           this.send({
             type: 'response.create',
-            response: { metadata: { kind: 'greeting' }, instructions: this.oneOff(GREETING_PROMPT) }
+            response: { metadata: this.newMeta('greeting'), instructions: this.oneOff(GREETING_PROMPT) }
           })
         }
         break
@@ -288,9 +356,8 @@ export class RealtimeClient extends EventEmitter {
       case 'input_audio_buffer.speech_started':
         this.userSpeaking = true
         this.emit('speechStarted')
-        // User barge-in: cancel the current response and have the playback side clear its buffer
-        if (this.responseActive) this.send({ type: 'response.cancel' })
-        this.emit('audioClear')
+        // User barge-in: cancel by id, truncate what they never heard, clear local playback
+        this.interruptPlayback()
         break
 
       case 'input_audio_buffer.speech_stopped':
@@ -317,10 +384,12 @@ export class RealtimeClient extends EventEmitter {
         break
       }
 
-      case 'response.created':
-        this.responseActive = true
-        this.emit('responseState', true)
+      case 'response.created': {
+        const id = String(ev.response?.id ?? '')
+        if (id) this.activeResponses.add(id)
+        if (this.activeResponses.size === 1) this.emit('responseState', true)
         break
+      }
 
       case 'response.output_item.done': {
         const item = ev.item
@@ -337,31 +406,44 @@ export class RealtimeClient extends EventEmitter {
       }
 
       case 'response.done': {
-        this.responseActive = false
-        this.emit('responseState', false)
         const resp = ev.response ?? {}
+        const respId = String(resp.id ?? '')
+        this.activeResponses.delete(respId)
+        if (this.activeResponses.size === 0) this.emit('responseState', false)
+        if (this.audibleResponseId === respId) this.audibleResponseId = null
         // A cancelled response never fires transcript.done; flush its partial as interrupted
-        this.flushTranscript(resp.id, true)
+        this.flushTranscript(respId, true)
         const kind = resp.metadata?.kind
         if (kind === 'probe') {
           this.emit('probeResult', this.extractText(resp))
           break
         }
-        // Only the judge's own response consumes the judge state — arrival order proved unreliable
-        if (kind === 'judge' && this.pendingJudge) {
-          this.pendingJudge = false
+        // Only the judge's own response resolves its own request — never arrival order
+        if (kind === 'judge') {
+          const requestId = String(resp.metadata?.requestId ?? '')
+          if (!this.pendingJudges.delete(requestId)) break
+          const judgeKind = String(resp.metadata?.judge ?? 'initiative')
           const line = this.extractText(resp)
           const spoke = Boolean(line && !/^pass\b/i.test(line) && !this.userSpeaking)
-          this.emit('judged', { line, spoke, kind: resp.metadata?.judge ?? 'initiative' })
-          // She decided to speak: actually say that line out loud; on PASS do nothing
+          this.emit('judged', { line, spoke, kind: judgeKind })
+          // She decided to speak: say that line out loud; on PASS do nothing
           if (spoke) {
-            this.send({
-              type: 'response.create',
-              response: {
-                metadata: { kind: 'speak_judged' },
-                instructions: this.oneOff(speakJudged(line))
-              }
-            })
+            if (this.isResponding || this.userSpeaking) {
+              // The moment passed while judging — a queued line would collide or duplicate
+              this.emit('lineDiscarded', {
+                line,
+                kind: judgeKind,
+                reason: this.userSpeaking ? 'user-speaking' : 'response-active'
+              })
+            } else {
+              this.send({
+                type: 'response.create',
+                response: {
+                  metadata: this.newMeta('speak_judged'),
+                  instructions: this.oneOff(speakJudged(line))
+                }
+              })
+            }
           }
         }
         break
@@ -369,7 +451,18 @@ export class RealtimeClient extends EventEmitter {
 
       case 'response.output_audio.delta':
       case 'response.audio.delta':
-        if (ev.delta) this.emit('audioDelta', Buffer.from(ev.delta, 'base64'))
+        if (ev.delta) {
+          const buf = Buffer.from(ev.delta, 'base64')
+          const itemId = String(ev.item_id ?? '')
+          if (itemId && this.currentAudioItem?.id !== itemId) {
+            this.currentAudioItem = { id: itemId, baseSamples: this.sentSamplesTotal, samples: 0 }
+          }
+          if (this.currentAudioItem) this.currentAudioItem.samples += buf.length >> 1
+          this.sentSamplesTotal += buf.length >> 1
+          const respId = String(ev.response_id ?? '')
+          if (respId) this.audibleResponseId = respId
+          this.emit('audioDelta', buf)
+        }
         break
 
       case 'response.output_audio_transcript.delta':

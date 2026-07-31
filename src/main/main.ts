@@ -291,7 +291,7 @@ function connect(): void {
   client.on('audioClear', () => win?.webContents.send('audio-clear'))
   // Complete spoken lines, assembled per response id inside the client (no cross-response splicing)
   client.on('ariaLine', ({ text, interrupted }: { text: string; interrupted: boolean }) => {
-    copilot.record('aria_text', interrupted ? { text, interrupted } : { text })
+    copilot.record('aria_text', { text, outcome: interrupted ? 'interrupted' : 'played' })
     stm.add('aria', interrupted ? `${text} (got cut off)` : text)
   })
   client.on('userTranscript', (t: string) => {
@@ -315,6 +315,8 @@ function connect(): void {
     }
   )
   client.on('probeResult', (text: string) => copilot.record('probe_result', { text }))
+  client.on('truncated', (d: Record<string, unknown>) => copilot.record('truncated', d))
+  client.on('lineDiscarded', (d: Record<string, unknown>) => copilot.record('line_discarded', d))
   client.on('responseState', (active: boolean) => {
     if (!active) lastActivityAt = Date.now() // She finished speaking; the silence clock restarts from this moment
     ui('aria-speaking', active)
@@ -329,6 +331,7 @@ function connect(): void {
   client.on(
     'functionCall',
     async ({ name, callId, args }: { name: string; callId: string; args: Record<string, unknown> }) => {
+      const owner = client // a reconnect swaps `client`; this result belongs to THIS session
       copilot.record('tool_call', { name, args })
       if (name === 'search_web') {
         const query = String(args.query ?? '').trim()
@@ -343,8 +346,12 @@ function connect(): void {
         recallScreens: () => stm.recentScreens(),
         setChattiness: applyChattiness
       })
+      if (client !== owner) {
+        copilot.record('tool_result_dropped', { name, gen: owner?.generation, reason: 'session rotated' })
+        return
+      }
       if (name === 'search_web') copilot.record('tool_result', { name, text: output.slice(0, 300) })
-      client?.sendFunctionResult(callId, output)
+      owner?.sendFunctionResult(callId, output)
     }
   )
 
@@ -364,6 +371,9 @@ app.whenReady().then(() => {
   ipcMain.on('disconnect', () => client?.close())
   ipcMain.on('audio-chunk', (_e, chunk: Uint8Array) => {
     client?.appendAudio(Buffer.from(chunk))
+  })
+  ipcMain.on('audio-pos', (_e, playedSamples: number) => {
+    client?.setPlaybackPosition(Number(playedSamples) || 0)
   })
 
   ipcMain.handle('get-sources', () => watcher.listSources(WINDOW_TITLE))

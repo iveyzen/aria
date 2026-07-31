@@ -85,12 +85,19 @@ async function ensureAudio() {
   await outCtx.audioWorklet.addModule('worklets/player-worklet.js')
   playerNode = new AudioWorkletNode(outCtx, 'player', { outputChannelCount: [1] })
   playerNode.connect(outCtx.destination)
+  let lastPosSentAt = 0
   playerNode.port.onmessage = e => {
     if (e.data.type !== 'level') return
     Orb.setLevel(e.data.playing ? e.data.level : 0)
     if (e.data.playing !== audioLive) {
       audioLive = e.data.playing
       refreshOrb() // thinking ↔ speaking switch
+    }
+    // Main needs real playback position for honest server-side truncation on barge-in
+    const now = performance.now()
+    if (now - lastPosSentAt > 120) {
+      lastPosSentAt = now
+      window.aria.sendAudioPos(e.data.played)
     }
   }
 

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('aria', {
   connect: () => ipcRenderer.send('connect'),
   disconnect: () => ipcRenderer.send('disconnect'),
   sendAudio: (chunk: Uint8Array) => ipcRenderer.send('audio-chunk', chunk),
+  sendAudioPos: (playedSamples: number) => ipcRenderer.send('audio-pos', playedSamples),
   getSources: () => ipcRenderer.invoke('get-sources'),
   setTarget: (target: unknown) => ipcRenderer.send('set-target', target),
   setWatch: (on: boolean) => ipcRenderer.send('set-watch', on),
