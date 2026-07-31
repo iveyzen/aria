@@ -282,6 +282,8 @@ function connect(): void {
         const result = query ? await searchWeb(query) : 'No search query provided'
         copilot.record('tool_result', { name, text: result.slice(0, 300) })
         client?.sendFunctionResult(callId, result)
+      } else if (name === 'recall_screen') {
+        client?.sendFunctionResult(callId, stm.recentScreens())
       } else if (name === 'remember_fact') {
         const fact = String(args.fact ?? '')
         addFact(fact)
