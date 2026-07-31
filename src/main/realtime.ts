@@ -10,12 +10,12 @@ import {
 } from './persona'
 
 /**
- * gpt-realtime-2.1 的 WebSocket 客户端。
+ * WebSocket client for gpt-realtime-2.1.
  *
- * 职责：音频流进出、把屏幕截图注入对话、修剪旧截图控制 token、
- * 打断（barge-in）时取消当前响应。
+ * Responsibilities: streaming audio in and out, injecting screenshots into the conversation,
+ * pruning old screenshots to keep tokens in check, and cancelling the current response on barge-in.
  *
- * 对外事件：
+ * Emitted events:
  *  open / close({code, reason, intentional}) / status(string) / apiError(string)
  *  audioDelta(Buffer PCM16@24k) / audioClear
  *  userTranscript(string) / ariaTranscriptDelta(string) / ariaTranscriptDone
@@ -29,10 +29,10 @@ export class RealtimeClient extends EventEmitter {
   private userSpeaking = false
   private closedByUs = false
   private greeted = false
-  /** 是否正在等一次"要不要开口"的无声判断结果 */
+  /** Whether we are waiting on the result of a silent "should I speak" judgment */
   private pendingJudge = false
 
-  /** extraContext：连接时刻的动态上下文（时间、长期记忆），拼在人设后面 */
+  /** extraContext: dynamic context at connect time (time, long-term memory), appended after the persona */
   constructor(cfg: AriaConfig, private readonly extraContext = '') {
     super()
     this.cfg = cfg
@@ -69,13 +69,13 @@ export class RealtimeClient extends EventEmitter {
     this.ws = null
   }
 
-  /** 追加一段用户麦克风音频（PCM16 mono 24kHz） */
+  /** Append a chunk of the user's mic audio (PCM16 mono 24kHz) */
   appendAudio(pcm16: Buffer): void {
     if (!this.isOpen) return
     this.send({ type: 'input_audio_buffer.append', audio: pcm16.toString('base64') })
   }
 
-  /** 注入一条系统提示（模式切换等），不触发响应 */
+  /** Inject a system note (mode switches etc.) without triggering a response */
   sendSystemNote(text: string): void {
     if (!this.isOpen) return
     this.send({
@@ -85,8 +85,9 @@ export class RealtimeClient extends EventEmitter {
   }
 
   /**
-   * 空闲主动搭话：安静一阵之后，让她看着最新截图无声判断要不要开口。
-   * 判断走纯文本（便宜、不出声）；输出 PASS 就当无事发生，写了台词就再让她真的说出来。
+   * Idle initiative: after a stretch of quiet, have her look at the latest screenshot and silently judge whether to speak.
+   * The judgment is text-only (cheap, makes no sound); PASS output means act as if nothing happened,
+   * a written line then gets actually spoken aloud.
    */
   requestInitiative(): void {
     if (!this.isOpen || this.responseActive || this.userSpeaking || this.pendingJudge) return
@@ -97,7 +98,7 @@ export class RealtimeClient extends EventEmitter {
     })
   }
 
-  /** 回传工具执行结果，并让 Aria 接着说 */
+  /** Return a tool call's result and let Aria continue speaking */
   sendFunctionResult(callId: string, output: string): void {
     if (!this.isOpen) return
     this.send({
@@ -107,7 +108,7 @@ export class RealtimeClient extends EventEmitter {
     this.send({ type: 'response.create' })
   }
 
-  /** 把截图作为用户消息注入对话；respondPrompt 非空时让 Aria 就此开口 */
+  /** Inject a screenshot into the conversation as a user message; if respondPrompt is set, have Aria speak on it */
   sendImage(jpegDataUrl: string, respondPrompt?: string): void {
     if (!this.isOpen) return
     this.send({
@@ -142,7 +143,7 @@ export class RealtimeClient extends EventEmitter {
             transcription: { model: 'gpt-4o-transcribe' },
             turn_detection: {
               type: 'semantic_vad',
-              // low：多等一拍再接话，游戏音/背景音环境下误触发更少
+              // low: wait an extra beat before responding, fewer false triggers with game/background audio around
               eagerness: 'low',
               create_response: true,
               interrupt_response: true
@@ -180,7 +181,7 @@ export class RealtimeClient extends EventEmitter {
       case 'input_audio_buffer.speech_started':
         this.userSpeaking = true
         this.emit('speechStarted')
-        // 用户开口打断：取消当前响应并让播放端清空缓冲
+        // User barge-in: cancel the current response and have the playback side clear its buffer
         if (this.responseActive) this.send({ type: 'response.cancel' })
         this.emit('audioClear')
         break
@@ -221,7 +222,7 @@ export class RealtimeClient extends EventEmitter {
           try {
             args = JSON.parse(item.arguments ?? '{}')
           } catch {
-            // 参数解析失败就给空对象，让处理端自行兜底
+            // If argument parsing fails, pass an empty object and let the handler do its own fallback
           }
           this.emit('functionCall', { name: item.name, callId: item.call_id, args })
         }
@@ -234,7 +235,7 @@ export class RealtimeClient extends EventEmitter {
         if (this.pendingJudge) {
           this.pendingJudge = false
           const line = this.extractText(ev.response)
-          // 她决定要说：把刚才那句真的用声音说出来；PASS 就什么都不做
+          // She decided to speak: actually say that line out loud; on PASS do nothing
           if (line && !/^pass\b/i.test(line) && !this.userSpeaking) {
             this.send({ type: 'response.create', response: { instructions: speakJudged(line) } })
           }
@@ -259,7 +260,7 @@ export class RealtimeClient extends EventEmitter {
 
       case 'error': {
         const msg: string = ev.error?.message ?? JSON.stringify(ev.error ?? ev)
-        // "无活跃响应可取消"和"已有活跃响应"都是正常竞态，不打扰用户
+        // "no active response to cancel" and "already has an active response" are both normal races; don't bother the user
         if (!/no active response|cancellation failed|already has an active response/i.test(msg)) {
           this.emit('apiError', msg)
         }
@@ -268,7 +269,7 @@ export class RealtimeClient extends EventEmitter {
     }
   }
 
-  /** 从 response.done 的响应对象里抽出纯文本输出（无声判断用） */
+  /** Extract the plain-text output from a response.done response object (used by the silent judgment) */
   private extractText(resp: any): string {
     if (!Array.isArray(resp?.output)) return ''
     let text = ''
@@ -282,7 +283,7 @@ export class RealtimeClient extends EventEmitter {
     return text.trim()
   }
 
-  /** 只保留最近 N 张截图，更早的从会话里删掉，避免图像 token 累积 */
+  /** Keep only the most recent N screenshots; delete earlier ones from the session so image tokens don't pile up */
   private trackImageItem(id: string | undefined): void {
     if (!id || this.imageItemIds.includes(id)) return
     this.imageItemIds.push(id)

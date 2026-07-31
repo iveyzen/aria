@@ -1,9 +1,9 @@
 import { desktopCapturer, screen as electronScreen, NativeImage } from 'electron'
 
 export interface Frame {
-  /** JPEG dataURL，最长边 1024px */
+  /** JPEG dataURL, longest side 1024px */
   dataUrl: string
-  /** 与上一帧的差异度 0~1（首帧为 1） */
+  /** Difference from the previous frame, 0–1 (1 for the first frame) */
   diff: number
   capturedAt: number
 }
@@ -22,12 +22,12 @@ export interface SourceInfo {
   appIcon?: string
 }
 
-/** 截取指定屏幕/窗口并计算帧间差异；不指定目标时截主屏 */
+/** Capture a given screen/window and compute frame-to-frame diff; captures the primary display when no target is set */
 export class ScreenWatcher {
   private prevSample: Buffer | null = null
   private capturing = false
   private target: CaptureTarget | null = null
-  /** 锁定的窗口在上次捕获时已经找不到了 */
+  /** The locked window could no longer be found during the last capture */
   targetLost = false
 
   get currentTarget(): CaptureTarget | null {
@@ -44,7 +44,7 @@ export class ScreenWatcher {
     this.prevSample = null
   }
 
-  /** 枚举可供 Aria "看"的屏幕和窗口（给选择器 UI 用） */
+  /** Enumerate the screens and windows Aria can "watch" (for the picker UI) */
   async listSources(excludeTitle: string): Promise<SourceInfo[]> {
     const sources = await desktopCapturer.getSources({
       types: ['screen', 'window'],
@@ -63,7 +63,7 @@ export class ScreenWatcher {
       .filter(s => s.thumbnail)
   }
 
-  /** 截一帧；上一帧还没截完时返回 null */
+  /** Capture one frame; returns null if the previous capture is still in flight */
   async captureNow(): Promise<Frame | null> {
     if (this.capturing) return null
     this.capturing = true
@@ -71,7 +71,7 @@ export class ScreenWatcher {
       const kind = this.target?.kind ?? 'screen'
       const sources = await desktopCapturer.getSources({
         types: [kind],
-        // 1536px 才认得清游戏里的小字、血条和小地图
+        // 1536px is needed to make out small in-game text, health bars and minimaps
         thumbnailSize: { width: 1536, height: 1536 }
       })
       if (!sources.length) return null
@@ -79,7 +79,7 @@ export class ScreenWatcher {
       let source = null
       if (this.target) {
         source = sources.find(s => s.id === this.target!.id) ?? null
-        // 窗口重开后 id 会变，按标题再找一次
+        // A reopened window gets a new id; retry the lookup by title
         if (!source && kind === 'window') {
           source = sources.find(s => s.name === this.target!.name) ?? null
           if (source) this.target.id = source.id
@@ -107,7 +107,7 @@ export class ScreenWatcher {
     }
   }
 
-  /** 缩到 32x18 后算 RGB 平均绝对差，够便宜也够灵敏 */
+  /** Downscale to 32x18 and compute mean absolute RGB diff — cheap enough, sensitive enough */
   private diffAgainstPrev(image: NativeImage): number {
     const sample = image.resize({ width: 32, height: 18 }).toBitmap()
     const prev = this.prevSample

@@ -9,15 +9,15 @@ import { evalDir, loadScenarios, loadScreen } from './scenarios'
 import { Exchange, RunReport, Scenario, ScenarioRun } from './types'
 
 /**
- * 用法：
- *   npm run eval                      跑全部场景，打分，出报告
- *   npm run eval -- --only boss-wipe  只跑某几条（逗号分隔）
- *   npm run eval -- --repeat 3        每条跑 3 遍取平均（模型有随机性，改人设前后对比一定要用）
- *   npm run eval -- --no-judge        只跑不打分（省钱，快速看她说了什么）
- *   npm run eval -- --compare a.json b.json   对比两次跑的结果
+ * Usage:
+ *   npm run eval                      run all scenarios, score them, produce a report
+ *   npm run eval -- --only boss-wipe  run only certain ones (comma-separated)
+ *   npm run eval -- --repeat 3        run each 3 times and average (the model is stochastic; always use this for before/after persona comparisons)
+ *   npm run eval -- --no-judge        run without scoring (cheaper; quick look at what she said)
+ *   npm run eval -- --compare a.json b.json   compare the results of two runs
  *
- * 注意：单跑一遍的分数噪声很大，尤其是 initiative 这种"开口 or 闭嘴"的二值判断。
- * 想判断一次人设改动是好是坏，至少 --repeat 3。
+ * Note: scores from a single pass are very noisy, especially for initiative's binary "speak or stay quiet" call.
+ * To judge whether a persona edit made things better or worse, use at least --repeat 3.
  */
 
 const MODEL = process.env.ARIA_EVAL_MODEL ?? 'gpt-realtime-2.1'
@@ -29,7 +29,7 @@ function arg(name: string): string | undefined {
 }
 const hasFlag = (name: string): boolean => process.argv.includes(`--${name}`)
 
-/** 优先环境变量，其次桌面端存的配置文件——跑评测不用再填一次 key */
+/** Prefer the env var, then the config file saved by the desktop app — so running evals doesn't require entering the key again */
 function resolveApiKey(): string {
   if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
   const appData =
@@ -41,7 +41,7 @@ function resolveApiKey(): string {
     const cfg = JSON.parse(fs.readFileSync(path.join(appData, 'aria', 'aria-config.json'), 'utf8'))
     if (cfg.apiKey) return String(cfg.apiKey)
   } catch {
-    // 没有配置文件就往下走，报错提示用户
+    // No config file — fall through and throw, prompting the user
   }
   throw new Error(
     'No API key. Set OPENAI_API_KEY, or run the desktop app once and save your key in settings.'
@@ -69,7 +69,7 @@ async function runScenario(
     if (screen) {
       client.addImage(screen)
     } else if (scenario.screenNote) {
-      // 没有截图时把画面描述当文字塞进去，报告里会标 degraded，别拿它当同等证据
+      // No screenshot: inject the screen description as text instead; the report marks this degraded — don't treat it as equivalent evidence
       client.addUserText(`[on screen right now: ${scenario.screenNote}]`)
     }
 
@@ -194,7 +194,7 @@ async function main(): Promise<void> {
   const mdPath = path.join(runsDir, `${stamp}.md`)
   fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf8')
   fs.writeFileSync(mdPath, renderReport(report), 'utf8')
-  // latest.* 固定名字，方便直接看最近一次
+  // latest.* use fixed names, so the most recent run is easy to open directly
   fs.writeFileSync(path.join(runsDir, 'latest.json'), JSON.stringify(report, null, 2), 'utf8')
   fs.writeFileSync(path.join(runsDir, 'latest.md'), renderReport(report), 'utf8')
 

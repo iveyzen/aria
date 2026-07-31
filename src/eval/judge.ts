@@ -2,10 +2,10 @@ import { ChatMessage, chatJson } from './openai'
 import { Exchange, Scenario, Verdict } from './types'
 
 /**
- * 裁判：只回答一个问题——"这句话是真人说的，还是 AI 说的？"
+ * The judge answers exactly one question: "was this line said by a real person, or by an AI?"
  *
- * 刻意不夸奖"有帮助""信息完整"，那些恰恰是 AI 腔的来源。
- * 最有价值的输出是 rewrite：真人会怎么说这句。改人设时照着 rewrite 和 aiTells 改。
+ * It deliberately gives no credit for "helpful" or "complete" — those are precisely where AI-speak comes from.
+ * The most valuable output is rewrite: how a real person would say this line. When editing the persona, work from rewrite and aiTells.
  */
 
 const RUBRIC = `
@@ -88,7 +88,7 @@ export async function judgeExchange(
 ): Promise<Verdict> {
   const text = buildContext(scenario, history, current)
   const content: unknown[] = [{ type: 'text', text }]
-  // 裁判也看同一张截图，才能判断她说的话贴不贴当下画面
+  // The judge sees the same screenshot too, so it can tell whether what she said fits the screen at that moment
   if (screenDataUrl) {
     content.push({ type: 'image_url', image_url: { url: screenDataUrl, detail: 'low' } })
   }
@@ -118,7 +118,7 @@ export async function judgeExchange(
   }
 }
 
-/** 三项分的平均，报告里排序用 */
+/** Average of the three scores, used for sorting in the report */
 export function score(v: Verdict): number {
   return (v.humanness + v.brevity + v.inCharacter) / 3
 }

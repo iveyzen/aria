@@ -32,7 +32,7 @@ let userSpeaking = false
 let ariaSpeaking = false
 let showCaptions = true
 let audioReady = false
-let audioLive = false // 扬声器里当下是否真的有她的声音
+let audioLive = false // whether her voice is actually coming out of the speakers right now
 let playerNode = null
 let selectedLevel = 'balanced'
 let statusTimer = null
@@ -50,7 +50,7 @@ void window.aria.getConfig().then(cfg => {
 })
 flashStatus('Click the orb to connect', 6000)
 
-/* ---------- 状态文字：只闪现，不常驻——圆环本身就是状态 ---------- */
+/* ---------- Status text: only flashes briefly, never persists — the orb itself is the status ---------- */
 
 function flashStatus(msg, dur = 3500) {
   els.status.textContent = msg
@@ -68,19 +68,19 @@ function refreshOrb() {
       : ariaSpeaking
         ? audioLive
           ? 'speaking'
-          : 'thinking' // 响应已开始但还没出声：在组织语言/查资料
+          : 'thinking' // response has started but no sound yet: composing her words / looking things up
         : userSpeaking
           ? 'listening'
           : 'idle'
   )
 }
 
-/* ---------- 音频管线 ---------- */
+/* ---------- Audio pipeline ---------- */
 
 async function ensureAudio() {
   if (audioReady) return
 
-  // 播放：Aria 的声音（PCM16 24kHz 流式）
+  // Playback: Aria's voice (PCM16 24kHz streaming)
   const outCtx = new AudioContext({ sampleRate: 24000 })
   await outCtx.audioWorklet.addModule('worklets/player-worklet.js')
   playerNode = new AudioWorkletNode(outCtx, 'player', { outputChannelCount: [1] })
@@ -90,17 +90,17 @@ async function ensureAudio() {
     Orb.setLevel(e.data.playing ? e.data.level : 0)
     if (e.data.playing !== audioLive) {
       audioLive = e.data.playing
-      refreshOrb() // thinking ↔ speaking 切换
+      refreshOrb() // thinking ↔ speaking switch
     }
   }
 
-  // 采集：麦克风 → PCM16 24kHz → 主进程
+  // Capture: microphone → PCM16 24kHz → main process
   const inCtx = new AudioContext({ sampleRate: 24000 })
   await inCtx.audioWorklet.addModule('worklets/mic-worklet.js')
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: {
       channelCount: 1,
-      echoCancellation: true, // 关键：不然 Aria 会听见自己说话
+      echoCancellation: true, // crucial: otherwise Aria would hear herself talking
       noiseSuppression: true,
       autoGainControl: true
     }
@@ -108,7 +108,7 @@ async function ensureAudio() {
   const source = inCtx.createMediaStreamSource(stream)
   const micNode = new AudioWorkletNode(inCtx, 'mic')
   source.connect(micNode)
-  micNode.connect(inCtx.destination) // worklet 输出静音，接上只为驱动图
+  micNode.connect(inCtx.destination) // the worklet outputs silence; connected only to keep the graph running
   micNode.port.onmessage = e => {
     if (!connected || !micEnabled) return
     const f32 = e.data
@@ -125,7 +125,7 @@ async function ensureAudio() {
 
 window.aria.onAudio(chunk => {
   if (!playerNode) return
-  const bytes = new Uint8Array(chunk).slice() // 拷贝以保证 2 字节对齐
+  const bytes = new Uint8Array(chunk).slice() // copy to guarantee 2-byte alignment
   const i16 = new Int16Array(bytes.buffer, 0, bytes.byteLength >> 1)
   const f32 = new Float32Array(i16.length)
   for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768
@@ -136,7 +136,7 @@ window.aria.onAudioClear(() => {
   playerNode?.port.postMessage({ type: 'clear' })
 })
 
-/* ---------- Aria 的一句话字幕 ---------- */
+/* ---------- Aria's one-line caption ---------- */
 
 function ariaLineDelta(delta) {
   if (!showCaptions) return
@@ -156,7 +156,7 @@ function ariaLineDone() {
   lineTimer = setTimeout(() => els.ariaLine.classList.add('faded'), 6000)
 }
 
-/* ---------- 主进程消息 ---------- */
+/* ---------- Messages from the main process ---------- */
 
 function setState(state) {
   const wasConnected = connected
@@ -165,7 +165,7 @@ function setState(state) {
   if (connected) {
     Sfx.on()
     flashStatus(watchingName ? `Online · watching ${watchingName}` : 'Online')
-    // 上线第一件事：让用户挑一个屏幕/窗口给她看
+    // First thing after coming online: have the user pick a screen/window for her to watch
     if (!wasConnected && !watchingName) setTimeout(() => void openPicker(), 700)
   } else if (connecting) {
     flashStatus('Connecting', 20000)
@@ -201,7 +201,7 @@ window.aria.onUi(({ channel, payload }) => {
       refreshOrb()
       break
     case 'user-said':
-      break // 极简界面不展示用户字幕
+      break // the minimal UI doesn't show user captions
     case 'watch-target':
       watchingName = payload ? payload.name : null
       if (!payload) watchingId = null
@@ -209,12 +209,12 @@ window.aria.onUi(({ channel, payload }) => {
       flashStatus(payload ? `Watching ${payload.name}` : 'Vision off')
       break
     case 'looked':
-      Orb.pulse() // 她看了一眼屏幕：轻轻吸一口气
+      Orb.pulse() // she glanced at the screen: a soft intake of breath
       break
   }
 })
 
-/* ---------- 圆环 = 连接开关 ---------- */
+/* ---------- The orb = connect toggle ---------- */
 
 els.orb.addEventListener('click', async () => {
   if (connecting) return
@@ -247,7 +247,7 @@ els.settingsBtn.addEventListener('click', () => void openSettings())
 els.minBtn.addEventListener('click', () => window.aria.winMin())
 els.closeBtn.addEventListener('click', () => window.aria.winClose())
 
-/* ---------- 感知目标选择器 ---------- */
+/* ---------- Perception target picker ---------- */
 
 async function openPicker() {
   Sfx.tap()
@@ -266,7 +266,7 @@ async function openPicker() {
     for (const s of items) {
       const card = document.createElement('button')
       card.className = 'card' + (s.id === watchingId ? ' cur' : '')
-      card.style.animationDelay = `${cardIndex++ * 45}ms` // 依次浮现
+      card.style.animationDelay = `${cardIndex++ * 45}ms` // cards fade in one after another
       const img = document.createElement('img')
       img.src = s.thumbnail
       const name = document.createElement('span')
@@ -299,7 +299,7 @@ els.pickerClose.addEventListener('click', () => {
   els.picker.classList.add('hidden')
 })
 
-/* ---------- 设置 ---------- */
+/* ---------- Settings ---------- */
 
 function selectLevel(level) {
   selectedLevel = LEVEL_HINTS[level] ? level : 'balanced'
@@ -326,11 +326,11 @@ async function openSettings() {
   els.settings.classList.remove('hidden')
 }
 
-// 输入 Key 时：辉光 + 风铃
+// While typing the key: glow + wind chime
 els.cfgApiKey.addEventListener('input', () => {
   Sfx.key()
   els.cfgApiKey.classList.remove('pulse')
-  void els.cfgApiKey.offsetWidth // 重启动画
+  void els.cfgApiKey.offsetWidth // restart the animation
   els.cfgApiKey.classList.add('pulse')
 })
 
@@ -342,7 +342,7 @@ els.cfgClose.addEventListener('click', () => {
 els.cfgSave.addEventListener('click', async () => {
   const cfg = await window.aria.getConfig()
   cfg.apiKey = els.cfgApiKey.value.trim()
-  // 只发档位，具体的冷却/阈值由主进程按预设填进去
+  // Only send the level; the main process fills in the concrete cooldowns/thresholds from its presets
   cfg.proactivity = selectedLevel
   cfg.showCaptions = els.cfgCaptions.checked
   cfg.alwaysOnTop = els.cfgOnTop.checked

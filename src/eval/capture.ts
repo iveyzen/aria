@@ -4,18 +4,20 @@ import * as path from 'path'
 import { evalDir } from './scenarios'
 
 /**
- * 给评测集拍素材用的小工具，跑在 Electron 里（截屏要 desktopCapturer）。
+ * Small utility for shooting eval-set assets, run inside Electron (screen capture
+ * needs desktopCapturer).
  *
  *   npm run eval:capture -- boss-entrance --delay 5
  *   npm run eval:capture -- my-shot --match "Elden Ring"
  *   npm run eval:capture -- --list
  *
- * 存成 eval/screens/<name>.png，再在场景 JSON 里写 "screen": "screens/<name>.png"，
- * 那一条就从"文字描述"升级成真正的看图测试。
+ * Saves to eval/screens/<name>.png; then add "screen": "screens/<name>.png" to the
+ * scenario JSON and that entry upgrades from a text description to a real
+ * look-at-the-image test.
  */
 
 function argv(): string[] {
-  // electron dist/eval/capture.js foo --delay 5 → 去掉前两个
+  // electron dist/eval/capture.js foo --delay 5 → drop the first two
   return process.argv.slice(2)
 }
 

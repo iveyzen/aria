@@ -2,9 +2,9 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { Scenario } from './types'
 
-/** eval/ 目录（截图和场景都放这儿，跟编译产物分开） */
+/** The eval/ directory (screenshots and scenarios both live here, separate from build output) */
 export function evalDir(): string {
-  // dist/eval/scenarios.js → 仓库根 → eval/
+  // dist/eval/scenarios.js → repo root → eval/
   return path.resolve(__dirname, '../../eval')
 }
 
@@ -38,9 +38,9 @@ export function loadScenarios(only?: string[]): Scenario[] {
 }
 
 /**
- * 读场景的截图，转成 Realtime 要的 dataURL。
- * 找不到文件返回 null——调用方会退化成纯文字场景并在报告里标 degraded，
- * 而不是假装这一条正常跑过了。
+ * Load the scenario's screenshot and convert it to the dataURL the Realtime API expects.
+ * Returns null when the file is missing — the caller falls back to a text-only scenario
+ * and marks it degraded in the report, rather than pretending this one ran normally.
  */
 export function loadScreen(scenario: Scenario): string | null {
   if (!scenario.screen) return null

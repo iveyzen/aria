@@ -4,11 +4,13 @@ import { searchWeb } from '../main/websearch'
 import { ToolCall } from './types'
 
 /**
- * 评测用的 Realtime 客户端。
+ * Realtime client for the eval harness.
  *
- * 关键点：instructions 直接用 src/main/persona.ts 里那份真人设，不复制、不改写——
- * 评测跑的必须是线上那个 Aria，否则调完的分数没意义。
- * 唯一的区别是 output_modalities 走 text：便宜、快、可读，人设行为是一样的。
+ * Key point: instructions use the real persona from src/main/persona.ts directly —
+ * no copying, no rewriting. The eval must run the exact Aria that ships in
+ * production, otherwise the tuned scores are meaningless.
+ * The only difference is output_modalities is text: cheap, fast, readable — the
+ * persona's behavior is the same.
  */
 
 interface ResponseResult {
@@ -28,7 +30,7 @@ export class EvalAriaClient {
     private readonly apiKey: string,
     private readonly model: string,
     private readonly memory = '',
-    /** 会话里最多留几张图，和线上 maxImagesKept 保持一致 */
+    /** Max images kept in the conversation, kept in sync with production maxImagesKept */
     private readonly maxImagesKept = 4
   ) {}
 
@@ -55,7 +57,7 @@ export class EvalAriaClient {
       this.failWaiter = null
     })
 
-    // 和线上一样：真人设 + 时间/记忆上下文，只是输出改成文本
+    // Same as production: real persona + time/memory context, only output switched to text
     this.send({
       type: 'session.update',
       session: {
@@ -74,7 +76,7 @@ export class EvalAriaClient {
     this.ws = null
   }
 
-  /** 注入一句用户台词（不触发响应） */
+  /** Inject a user utterance (does not trigger a response) */
   addUserText(text: string): void {
     this.send({
       type: 'conversation.item.create',
@@ -82,7 +84,7 @@ export class EvalAriaClient {
     })
   }
 
-  /** 注入一张截图（不触发响应），并按线上规则修剪旧图 */
+  /** Inject a screenshot (does not trigger a response), pruning old images per the production rule */
   addImage(dataUrl: string): void {
     this.send({
       type: 'conversation.item.create',
@@ -91,9 +93,10 @@ export class EvalAriaClient {
   }
 
   /**
-   * 让她回一次话。instructions 对应线上那几个一次性提示
-   * （PROACTIVE_PROMPT / INITIATIVE_PROMPT），不传就是普通对话轮。
-   * 中途她要是调工具，这里会真的执行再让她接着说，和线上行为一致。
+   * Have her respond once. instructions corresponds to the one-shot prompts used
+   * in production (PROACTIVE_PROMPT / INITIATIVE_PROMPT); omit it for a normal
+   * conversation turn. If she calls a tool midway, it is actually executed here
+   * and she continues speaking, matching production behavior.
    */
   async respond(instructions?: string): Promise<{ text: string; toolCalls: ToolCall[] }> {
     const toolCalls: ToolCall[] = []
@@ -104,7 +107,7 @@ export class EvalAriaClient {
       response: instructions ? { instructions } : {}
     })
 
-    // 最多让她"调工具→接着说"来回 4 次，防止死循环
+    // Allow at most 4 "call tool → keep talking" round trips to guard against infinite loops
     for (let hop = 0; hop < 4; hop++) {
       const res = await this.awaitResponse()
       if (res.text) text += (text ? ' ' : '') + res.text
@@ -128,7 +131,7 @@ export class EvalAriaClient {
       const q = String(args.query ?? '').trim()
       return q ? await searchWeb(q) : 'No search query provided'
     }
-    // remember_fact：评测里不落盘，记一笔就够了（是否记忆本身也是评分信号）
+    // remember_fact: not persisted to disk in evals — acknowledging is enough (whether she chooses to remember is itself a scoring signal)
     if (name === 'remember_fact') return 'Noted'
     return `Unknown tool: ${name}`
   }
@@ -166,7 +169,7 @@ export class EvalAriaClient {
             resolve()
           }
         } catch {
-          // 不是 JSON 就忽略
+          // Ignore anything that isn't JSON
         }
       }
       this.ws?.on('message', onMsg)
@@ -211,7 +214,7 @@ export class EvalAriaClient {
           try {
             args = JSON.parse(item.arguments ?? '{}')
           } catch {
-            // 解析不了就当空参数，execTool 会兜底
+            // If parsing fails, treat it as empty args; execTool will handle it
           }
           this.functionCalls.push({ name: item.name, callId: item.call_id, args })
         }
@@ -219,7 +222,7 @@ export class EvalAriaClient {
       }
 
       case 'response.done': {
-        // 流式 delta 偶尔收不全，用 response.done 里的完整文本兜底
+        // Streaming deltas occasionally arrive incomplete; fall back to the full text in response.done
         const text = this.deltas.trim() || this.extractText(ev.response)
         const result = { text, functionCalls: this.functionCalls }
         this.deltas = ''

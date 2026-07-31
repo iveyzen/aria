@@ -1,4 +1,4 @@
-/** 攒够约 100ms（2400 样本 @24kHz）的麦克风音频就发给主线程 */
+/** Accumulate ~100ms of mic audio (2400 samples @24kHz) before posting it to the main thread */
 class MicProcessor extends AudioWorkletProcessor {
   constructor() {
     super()

@@ -3,8 +3,9 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 /**
- * Aria 的长期记忆：一行一条事实，带日期，纯文本文件。
- * 会话开始时注入最近若干条到 instructions，让她"记得你"。
+ * Aria's long-term memory: one dated fact per line, plain text file.
+ * The most recent entries are injected into the instructions at session
+ * start so she "remembers you".
  */
 
 function memoryPath(): string {

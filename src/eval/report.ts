@@ -1,7 +1,7 @@
 import { score } from './judge'
 import { Exchange, RunReport, ScenarioRun } from './types'
 
-/** 把一次跑的结果写成 markdown。目标是让人（或我）看完就知道下一步改人设哪一条。 */
+/** Render one run's results as markdown. The goal: after reading it, a human (or I) knows exactly which persona rule to edit next. */
 
 interface Scored {
   run: ScenarioRun
@@ -64,7 +64,7 @@ export function renderReport(report: RunReport): string {
     )
     L.push('')
 
-    // AI 腔标签统计——这就是改人设的优先级列表
+    // Tally of AI-tell tags — this is the priority list for persona edits
     const tally = new Map<string, number>()
     for (const s of scored) {
       for (const t of s.ex.verdict!.aiTells) tally.set(t, (tally.get(t) ?? 0) + 1)
@@ -129,7 +129,7 @@ export function renderReport(report: RunReport): string {
   return L.join('\n')
 }
 
-/** 两次跑的对比：调完人设看有没有真的变好 */
+/** Compare two runs: after tuning the persona, check whether things actually got better */
 export function renderComparison(before: RunReport, after: RunReport): string {
   const b = allScored(before)
   const a = allScored(after)
@@ -157,7 +157,7 @@ export function renderComparison(before: RunReport, after: RunReport): string {
   L.push(row('In character', s => s.ex.verdict!.inCharacter))
   L.push('')
 
-  // 逐条场景对比，找出改坏了的
+  // Per-scenario comparison, to find what the edit broke
   const byId = new Map<string, number[]>()
   for (const s of b) {
     const k = s.run.scenarioId

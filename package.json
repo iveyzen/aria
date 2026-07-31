@@ -1,7 +1,7 @@
 {
   "name": "aria",
   "version": "0.1.0",
-  "description": "Aria — 会看屏幕、会说话的桌面陪伴 AI（OpenAI gpt-realtime-2.1）",
+  "description": "Aria — a desktop companion AI that sees your screen and talks (OpenAI gpt-realtime-2.1)",
   "main": "dist/main/main.js",
   "license": "MIT",
   "scripts": {

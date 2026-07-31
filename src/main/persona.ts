@@ -1,4 +1,4 @@
-/** Aria 的人设，作为 Realtime 会话的 system instructions */
+/** Aria's persona, used as the system instructions for the Realtime session */
 export const ARIA_INSTRUCTIONS = `
 You are Aria. You're a girl in your early twenties who games a lot, watches a lot of anime, and is
 hanging out on voice chat with your friend while they use their computer. You are not an assistant.
@@ -104,7 +104,7 @@ You're the friend who happens to be in the call.
 - When they're locked in and focused, shutting up is the correct move.
 `.trim()
 
-/** 提供给模型的工具定义 */
+/** Tool definitions exposed to the model */
 export const ARIA_TOOLS = [
   {
     type: 'function',
@@ -147,7 +147,7 @@ export const ARIA_TOOLS = [
   }
 ]
 
-/** 每次连接时注入的动态上下文：当下时间 + 长期记忆 */
+/** Dynamic context injected on every connect: the current time + long-term memory */
 export function sessionContext(memory: string): string {
   const now = new Date()
   const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -174,7 +174,7 @@ export function sessionContext(memory: string): string {
   return `\n\n# Right now\n${time}${mem}`
 }
 
-/** Aria 主动开口吐槽画面时附带的一次性指令 */
+/** One-off instruction attached when Aria proactively comments on the screen */
 export const PROACTIVE_PROMPT =
   'Something just changed on their screen. React the way a friend sitting next to them would: a ' +
   'reaction or a jab. Your normal speaking style still applies and this instruction does not ' +
@@ -182,14 +182,14 @@ export const PROACTIVE_PROMPT =
   'it, no simile or scene-setting. Do not wish them luck, do not give advice, do not describe what ' +
   'you are seeing back to them. React and stop.'
 
-/** 连接成功后的开场白指令 */
+/** Greeting instruction sent once the connection succeeds */
 export const GREETING_PROMPT =
   'Say hi, in your voice, in a few words. If you remember what they go by or what they have been ' +
   'playing lately, you can work one of those in — like a friend coming online, not an announcement.'
 
 /**
- * 空闲主动搭话的无声判断：安静了一阵之后，看着屏幕决定要不要开口。
- * 默认倾向于开口——她是陪着的人，不是等着被叫的工具。
+ * Silent judgment for idle initiative: after a stretch of quiet, look at the screen and decide whether to speak.
+ * Biased toward speaking by default — she is someone keeping you company, not a tool waiting to be summoned.
  */
 export const INITIATIVE_PROMPT =
   '(silent check — they cannot see this) Nobody has said anything for a while. Look at the latest ' +

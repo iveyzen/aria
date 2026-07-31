@@ -1,41 +1,43 @@
 /**
- * Aria —— 珊瑚色微尘星云环（《Her》的视觉语言）。
+ * Aria — a coral dust-nebula ring (the visual language of "Her").
  *
- * 不再用描边圆环：170 颗预渲染的柔光粒子组成一个有景深的尘环，
- * 近处颗粒小而实，远处颗粒大而虚（bokeh），整体缓慢漂流、呼吸。
- * 所有状态切换都通过参数插值过渡，没有任何硬跳变。
+ * No stroked circle anymore: pre-rendered soft-glow particles form a dust
+ * ring with depth of field — near grains are small and sharp, far ones are
+ * large and blurry (bokeh) — and the whole thing slowly drifts and breathes.
+ * Every state change transitions via parameter interpolation; there are no
+ * hard jumps.
  *
- * 状态: disconnected | connecting | idle | listening | thinking | speaking
- *  - 说话：尘环随音量向外绽开、加速、增亮
- *  - 聆听：尘环轻轻收拢、放慢，像屏息
- *  - 思考：微微收拢加速，内核缓慢明暗（在组织语言/查资料）
- *  - 连接中：整体缓慢明暗脉动
- *  - 离线：褪成暖灰，几乎静止
- * 另有 pulse()：一次"吸气"脉动，用在她看了一眼屏幕的瞬间。
+ * States: disconnected | connecting | idle | listening | thinking | speaking
+ *  - speaking: the ring blooms outward with volume, speeds up, brightens
+ *  - listening: the ring gently tightens and slows, like holding a breath
+ *  - thinking: slight tighten + speed-up, core slowly dims and glows (composing / looking things up)
+ *  - connecting: the whole ring slowly pulses light and dark
+ *  - offline: fades to warm gray, almost still
+ * Also pulse(): a single "inhale" pulse, used the moment she glances at the screen.
  */
 const Orb = (() => {
   const SIZE = 300
-  const R = 76 // 尘环基准半径
+  const R = 76 // base radius of the dust ring
   const COUNT = 240
 
   let canvas = null
   let ctx = null
   let state = 'disconnected'
   let level = 0
-  let smooth = 0 // 平滑音量
-  let push = 0 // 说话时的向外绽开量
+  let smooth = 0 // smoothed volume
+  let push = 0 // outward bloom while speaking
   let t = 0
   let lastTs = 0
   let frameDt = 0.016
 
-  // 插值状态参数（消灭硬切换）
-  let vis = 0.35 // 整体可见度
-  let energy = 0.06 // 流速/活跃度
-  let tighten = 0 // 聆听时的收拢
-  let warm = 0 // 0=离线暖灰 1=珊瑚暖色
-  let pulseE = 0 // "吸气"脉动包络
+  // Interpolated state parameters (no hard switches)
+  let vis = 0.35 // overall visibility
+  let energy = 0.06 // flow speed / liveliness
+  let tighten = 0 // tightening while listening
+  let warm = 0 // 0 = offline warm gray, 1 = warm coral
+  let pulseE = 0 // "inhale" pulse envelope
 
-  /** 预渲染柔光粒子贴图：近似高斯衰减，无硬边 */
+  /** Pre-rendered soft-glow particle sprite: approximate Gaussian falloff, no hard edges */
   function makeSprite(h, s, l) {
     const px = 64
     const c = document.createElement('canvas')
@@ -51,12 +53,12 @@ const Orb = (() => {
     return c
   }
 
-  // 电影同款配色：珊瑚红为主，朱红压深，桃色做高光尘
+  // Movie-matched palette: coral as the base, vermilion for depth, peach for highlight dust
   const SPRITES = {
     coral: makeSprite(8, 78, 55),
     vermilion: makeSprite(14, 74, 43),
     peach: makeSprite(26, 92, 68),
-    ash: makeSprite(28, 12, 46) // 离线暖灰：压深一点才看得清
+    ash: makeSprite(28, 12, 46) // offline warm gray: darkened a bit so it stays visible
   }
 
   function pickTint(r) {
@@ -65,19 +67,19 @@ const Orb = (() => {
     return SPRITES.peach
   }
 
-  // 粒子：轨道半径呈钟形散布在 R 附近，形成有厚度的尘环
+  // Particles: orbit radii bell-curve around R, forming a dust ring with thickness
   const PARTICLES = Array.from({ length: COUNT }, () => {
-    const bell = (Math.random() + Math.random() + Math.random()) / 3 // 近似高斯
+    const bell = (Math.random() + Math.random() + Math.random()) / 3 // approximate Gaussian
     return {
       ang: Math.random() * Math.PI * 2,
       sp: (0.05 + Math.random() * 0.22) * (Math.random() < 0.12 ? -0.7 : 1),
       r0: R * (0.72 + bell * 0.52),
-      z: Math.random(), // 景深：越大越虚越大颗
+      z: Math.random(), // depth of field: the larger, the blurrier and bigger the grain
       tint: pickTint(Math.random()),
       ph: Math.random() * Math.PI * 2,
-      oscA: 2 + Math.random() * 5, // 径向漂移幅度
+      oscA: 2 + Math.random() * 5, // radial drift amplitude
       oscF: 0.25 + Math.random() * 0.5,
-      twF: 0.5 + Math.random() * 1.1, // 明暗闪烁频率
+      twF: 0.5 + Math.random() * 1.1, // twinkle frequency
       baseA: 0.5 + Math.random() * 0.5
     }
   })
@@ -102,7 +104,7 @@ const Orb = (() => {
     level = v
   }
 
-  /** 一次轻轻的"吸气"：她刚看了一眼屏幕 */
+  /** One gentle "inhale": she just glanced at the screen */
   function pulse() {
     pulseE = 1
   }
@@ -114,7 +116,7 @@ const Orb = (() => {
     t += dt
     smooth += (level - smooth) * Math.min(1, dt * 14)
 
-    // 状态目标值 + 缓动插值
+    // Per-state targets + eased interpolation
     const target =
       state === 'speaking'
         ? { vis: 1, energy: 0.55 + smooth * 0.8, tighten: 0, warm: 1 }
@@ -134,7 +136,7 @@ const Orb = (() => {
     warm += (target.warm - warm) * k
     const pushTarget = state === 'speaking' ? smooth : 0
     push += (pushTarget - push) * Math.min(1, dt * 8)
-    pulseE -= pulseE * Math.min(1, dt * 1.7) // 吸气后缓缓吐出
+    pulseE -= pulseE * Math.min(1, dt * 1.7) // slowly exhale after the inhale
 
     draw()
     requestAnimationFrame(loop)
@@ -148,7 +150,7 @@ const Orb = (() => {
     const breath = 1 + 0.022 * Math.sin(t * 0.65)
     const pulse = state === 'connecting' ? 0.72 + 0.28 * Math.sin(t * 3.6) : 1
 
-    // 底层：中心暖光，说话时随音量涨落；思考时缓慢明暗；看屏幕的瞬间亮一下
+    // Base layer: central warm glow — swells with volume while speaking, slowly dims and glows while thinking, flares the moment she looks at the screen
     const thinkGlow = state === 'thinking' ? 0.04 + 0.035 * Math.sin(t * 2.3) : 0
     const coreA =
       (0.08 + push * 0.16 + energy * 0.04 + thinkGlow + pulseE * 0.12) * vis * pulse
@@ -160,9 +162,9 @@ const Orb = (() => {
     ctx.fillStyle = core
     ctx.fill()
 
-    const contract = 1 - tighten * 0.1 - pulseE * 0.05 // 聆听/吸气时轻轻收拢
+    const contract = 1 - tighten * 0.1 - pulseE * 0.05 // gently tighten while listening / inhaling
 
-    // 尘环体量：粒子下面垫一圈柔光环带，给星云"密度"（离线时用暖灰）
+    // Ring body: a soft glow band under the particles gives the nebula "density" (warm gray when offline)
     {
       const bandR = R * breath * contract
       const bandA = (0.1 + push * 0.08 + energy * 0.03) * vis * pulse
@@ -179,7 +181,7 @@ const Orb = (() => {
       ctx.fill()
     }
 
-    // 尘环粒子
+    // Dust-ring particles
     const speedMul = 0.35 + energy * 2.3
     for (const p of PARTICLES) {
       p.ang += p.sp * speedMul * frameDt
@@ -193,7 +195,7 @@ const Orb = (() => {
       const a =
         p.baseA * (0.92 - p.z * 0.42) * vis * tw * (0.8 + energy * 0.5) * pulse
       if (a < 0.01) continue
-      // 暖色与离线灰交叉淡入淡出
+      // Cross-fade between warm color and offline gray
       if (warm > 0.02) {
         ctx.globalAlpha = a * warm
         ctx.drawImage(p.tint, x - size / 2, y - size / 2, size, size)
@@ -205,7 +207,7 @@ const Orb = (() => {
     }
     ctx.globalAlpha = 1
 
-    // 一根几乎看不见的基准圆，让形体有"锚"
+    // A nearly invisible reference circle to anchor the shape
     ctx.beginPath()
     ctx.arc(0, 0, R * breath * contract, 0, Math.PI * 2)
     ctx.strokeStyle = `hsla(14, 60%, 50%, ${0.05 * vis * warm})`

@@ -1,4 +1,4 @@
-/** 流式播放队列：收 Float32 chunk 顺序播放，收到 clear 立刻静音（打断用） */
+/** Streaming playback queue: plays incoming Float32 chunks in order; goes silent immediately on clear (for barge-in) */
 class PlayerProcessor extends AudioWorkletProcessor {
   constructor() {
     super()
@@ -32,7 +32,7 @@ class PlayerProcessor extends AudioWorkletProcessor {
     }
     for (let i = 0; i < written; i++) energy += out[i] * out[i]
 
-    // 每 ~10 块（约 27ms x 10）汇报一次音量，驱动 Aria 的嘴型动画
+    // Report volume every ~10 blocks (~27ms x 10) to drive Aria's mouth animation
     this.blocksSincePost++
     if (this.blocksSincePost >= 10) {
       this.blocksSincePost = 0

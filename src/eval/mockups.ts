@@ -4,13 +4,16 @@ import * as path from 'path'
 import { evalDir } from './scenarios'
 
 /**
- * 给评测集生成"看得见的"素材：把一组 HTML 拟真界面离屏渲染成 PNG。
+ * Generates "visible" assets for the eval set: renders a batch of realistic HTML
+ * mock UIs to PNG off-screen.
  *
  *   npm run eval:mockups
  *
- * 为什么不直接截用户的真屏幕：那是 ta 的私人桌面。这里生成的图不涉及隐私，
- * 又能让评测真正走到"看图"这条路上，而不是只喂一句文字描述。
- * 拿到真实游戏截图后，用 eval:capture 覆盖同名文件即可，场景不用改。
+ * Why not just capture the user's real screen: that's their private desktop. The
+ * images generated here carry no privacy concerns, yet still let the eval actually
+ * exercise the "look at the image" path instead of being fed a one-line text
+ * description. Once you have real game screenshots, just overwrite the same-named
+ * files via eval:capture — the scenarios don't need to change.
  */
 
 const W = 1536
@@ -23,7 +26,7 @@ const BASE = `
   .center{display:flex;align-items:center;justify-content:center;flex-direction:column}
 `
 
-/** 一个昏暗的 boss 场景背景，好几张图共用 */
+/** A dim boss-arena background, shared by several mockups */
 const arena = `
   background:
     radial-gradient(60% 50% at 50% 60%, #4a3a2e 0%, #1a1512 70%, #0b0908 100%);
@@ -285,7 +288,8 @@ const MOCKUPS: Record<string, string> = {
 }
 
 /**
- * 全程复用同一个离屏窗口：每张图新建再销毁会让下一次 loadFile 直接 ERR_FAILED。
+ * Reuse one off-screen window for the whole run: creating and destroying a window
+ * per image makes the next loadFile fail outright with ERR_FAILED.
  */
 async function shoot(
   win: BrowserWindow,
@@ -294,11 +298,11 @@ async function shoot(
   dir: string,
   tmp: string
 ): Promise<void> {
-  // 走临时文件而不是 data: URL——这些页面太长，loadURL 会直接拒掉
+  // Go through a temp file rather than a data: URL — these pages are too long and loadURL rejects them outright
   const page = path.join(tmp, `${name}.html`)
   fs.writeFileSync(page, `<!doctype html><meta charset="utf-8"><style>${BASE}</style>${html}`, 'utf8')
   await win.loadFile(page)
-  // 等一帧渲染完，不然拿到空白图
+  // Wait for a frame to finish rendering, otherwise we get a blank image
   await new Promise(r => setTimeout(r, 400))
   const img = await win.webContents.capturePage()
   fs.writeFileSync(path.join(dir, `${name}.png`), img.toPNG())

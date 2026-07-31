@@ -1,6 +1,6 @@
 /**
- * 全部音效由 Web Audio 现场合成，无音频文件。
- * 基调：柔和的正弦/三角波 + 指数衰减，克制、温暖。
+ * All sound effects are synthesized live with Web Audio — no audio files.
+ * Tone: soft sine/triangle waves + exponential decay; restrained and warm.
  */
 const Sfx = (() => {
   let ctx = null
@@ -35,27 +35,27 @@ const Sfx = (() => {
   }
 
   return {
-    /** 输入 API Key 时的玻璃风铃，音高带一点随机 */
+    /** Glass wind-chime while typing the API key, with slightly randomized pitch */
     key() {
       tone({ freq: 1560 + Math.random() * 240, dur: 0.09, gain: 0.15 })
       tone({ freq: 2350 + Math.random() * 320, dur: 0.05, gain: 0.05, when: 0.012 })
     },
-    /** 按钮轻触 */
+    /** Light button tap */
     tap() {
       tone({ freq: 540, dur: 0.06, type: 'triangle', gain: 0.18 })
     },
-    /** 连接成功：温暖的三音上行（G4-C5-E5） */
+    /** Connected: warm three-note ascent (G4-C5-E5) */
     on() {
       tone({ freq: 392.0, dur: 0.5, gain: 0.22 })
       tone({ freq: 523.25, dur: 0.6, gain: 0.18, when: 0.11 })
       tone({ freq: 659.25, dur: 0.85, gain: 0.14, when: 0.24 })
     },
-    /** 断开：下行两音 */
+    /** Disconnected: two descending notes */
     off() {
       tone({ freq: 523.25, dur: 0.4, gain: 0.18 })
       tone({ freq: 349.23, dur: 0.65, gain: 0.14, when: 0.13 })
     },
-    /** 出错：低沉的软鼓点 */
+    /** Error: a low, soft thump */
     err() {
       tone({ freq: 196, to: 130, dur: 0.4, gain: 0.22 })
     }

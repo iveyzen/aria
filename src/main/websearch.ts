@@ -1,6 +1,6 @@
 import * as https from 'https'
 
-/** 无需 API Key 的网页搜索（DuckDuckGo HTML 版），返回前几条标题+摘要 */
+/** Web search that needs no API key (DuckDuckGo HTML version), returns the top few titles + snippets */
 
 function fetchHtml(url: string, redirects = 3): Promise<string> {
   return new Promise((resolve, reject) => {

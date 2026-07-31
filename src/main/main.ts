@@ -19,10 +19,10 @@ let captureTimer: ReturnType<typeof setInterval> | null = null
 let initiativeTimer: ReturnType<typeof setInterval> | null = null
 let lastImageAt = 0
 let lastProactiveAt = 0
-/** 最后一次"有人说话"（用户开口或 Aria 说完）的时刻，空闲主动搭话据此计时 */
+/** Timestamp of the last "someone spoke" moment (user spoke up or Aria finished); idle initiative timing is based on this */
 let lastActivityAt = 0
 
-/** 每隔这么久检查一次"是不是该主动找话说了" */
+/** How often to check "is it time to strike up a conversation" */
 const INITIATIVE_TICK_MS = 5_000
 
 function ui(channel: string, payload?: unknown): void {
@@ -69,8 +69,8 @@ function stopInitiative(): void {
 }
 
 /**
- * 空闲主动搭话：安静够久之后看一眼屏幕，让她自己判断要不要开口。
- * 判断走的是纯文本响应（便宜、无声），说不说得出来由她决定，PASS 就沉默。
+ * Idle initiative: after enough quiet, glance at the screen and let her decide for herself whether to speak.
+ * The judgment runs as a text-only response (cheap, silent); whether anything gets said is up to her, PASS means silence.
  */
 async function maybeStartSomething(): Promise<void> {
   if (!client?.isOpen) return
@@ -81,18 +81,18 @@ async function maybeStartSomething(): Promise<void> {
   if (now - lastActivityAt < cfg.idleInitiativeMs) return
   if (now - lastProactiveAt < cfg.proactiveCooldownMs) return
 
-  // 先补一张最新截图，她才知道现在屏幕上是什么
+  // Send a fresh screenshot first so she knows what is on the screen right now
   if (watchEnabled) await captureAndMaybeSend(true)
   if (!client?.isOpen || client.isResponding || client.isUserSpeaking) return
 
   lastProactiveAt = now
-  lastActivityAt = now // 无论她开不开口都重新计时，避免每 tick 都判断一次
+  lastActivityAt = now // Restart the timer whether or not she speaks, to avoid judging on every tick
   client.requestInitiative()
 }
 
 /**
- * 截一帧目标画面。变化超过阈值（或 forced）就发给 Aria；
- * 变化非常大且冷却结束时，让她主动开口吐槽。
+ * Capture one frame of the target. If the change exceeds the threshold (or forced), send it to Aria;
+ * if the change is very large and the cooldown is over, have her comment on it proactively.
  */
 async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Promise<void> {
   if (!client?.isOpen) return
@@ -127,7 +127,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
     prompt = PROACTIVE_PROMPT
   }
   client.sendImage(frame.dataUrl, prompt)
-  ui('looked') // 圆环"吸一口气"：她刚看了一眼
+  ui('looked') // The ring "takes a breath": she just took a look
 }
 
 function connect(): void {
@@ -146,12 +146,12 @@ function connect(): void {
     ui('state', 'connected')
     watcher.reset()
     lastImageAt = 0
-    // 首帧 diff 恒为 1，压住主动吐槽的冷却，避免和开场白撞车
+    // The first frame's diff is always 1; hold down the proactive cooldown so it doesn't collide with the greeting
     lastProactiveAt = Date.now()
     lastActivityAt = Date.now()
     if (watchEnabled) {
       startWatching()
-      void captureAndMaybeSend(true) // 上线先看一眼当前屏幕
+      void captureAndMaybeSend(true) // Take a first look at the current screen on connect
     }
     stopInitiative()
     initiativeTimer = setInterval(() => void maybeStartSomething(), INITIATIVE_TICK_MS)
@@ -174,13 +174,13 @@ function connect(): void {
   client.on('ariaTranscriptDelta', (d: string) => ui('aria-delta', d))
   client.on('ariaTranscriptDone', () => ui('aria-done'))
   client.on('responseState', (active: boolean) => {
-    if (!active) lastActivityAt = Date.now() // 她说完了，沉默从这一刻重新计时
+    if (!active) lastActivityAt = Date.now() // She finished speaking; the silence clock restarts from this moment
     ui('aria-speaking', active)
   })
   client.on('speechStarted', () => {
     lastActivityAt = Date.now()
     ui('user-speaking', true)
-    // 用户开口的瞬间补一张最新截图，让 Aria 知道 ta 正看着什么
+    // The moment the user starts speaking, send a fresh screenshot so Aria knows what they are looking at
     if (watchEnabled) void captureAndMaybeSend(true)
   })
   client.on('speechStopped', () => ui('user-speaking', false))
@@ -239,13 +239,13 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-config', () => loadConfig())
   ipcMain.handle('save-config', (_e, next: AriaConfig) => {
-    // 界面只选主动程度的档位，把档位展开成具体数值再存，这样配置文件始终自洽
+    // The UI only picks a proactivity level; expand the level into concrete values before saving so the config file stays self-consistent
     const level = PROACTIVITY_PRESETS[next.proactivity] ? next.proactivity : 'balanced'
     const merged: AriaConfig = { ...next, proactivity: level, ...PROACTIVITY_PRESETS[level] }
     saveConfig(merged)
     cfg = merged
     win?.setAlwaysOnTop(cfg.alwaysOnTop)
-    if (captureTimer) startWatching() // 应用新的截图间隔
+    if (captureTimer) startWatching() // Apply the new capture interval
     return cfg
   })
 

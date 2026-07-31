@@ -1,6 +1,6 @@
 import * as https from 'https'
 
-/** 裁判用的普通 Chat Completions 调用（Realtime 那条链路在 ariaClient 里） */
+/** Plain Chat Completions call for the judge (the Realtime path lives in ariaClient) */
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -48,7 +48,7 @@ function postJson(path: string, apiKey: string, body: unknown): Promise<any> {
   })
 }
 
-/** 要求模型返回 JSON 对象；解析失败就抛，让调用方决定怎么兜底 */
+/** Ask the model to return a JSON object; throw on parse failure and let the caller decide how to recover */
 export async function chatJson(
   apiKey: string,
   model: string,

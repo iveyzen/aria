@@ -4,26 +4,26 @@ import * as path from 'path'
 
 export type ProactivityLevel = 'quiet' | 'balanced' | 'chatty'
 
-/** 三档主动程度对应的具体参数。UI 选一档，写进 config 的就是这些数值。 */
+/** Concrete parameters for the three proactivity levels. The UI picks a level; these are the values written into config. */
 export const PROACTIVITY_PRESETS: Record<
   ProactivityLevel,
   Pick<AriaConfig, 'proactive' | 'proactiveCooldownMs' | 'proactiveDiffThreshold' | 'idleInitiativeMs'>
 > = {
-  // 基本只在被叫到时说话
+  // Basically only speaks when spoken to
   quiet: {
     proactive: true,
     proactiveCooldownMs: 90_000,
     proactiveDiffThreshold: 0.2,
     idleInitiativeMs: 120_000
   },
-  // 默认档：画面有动静会吐槽，安静半分钟就会自己找话说
+  // Default level: comments when something happens on screen, and finds something to say after half a minute of quiet
   balanced: {
     proactive: true,
     proactiveCooldownMs: 25_000,
     proactiveDiffThreshold: 0.12,
     idleInitiativeMs: 30_000
   },
-  // 一直在旁边碎碎念的搭子
+  // The companion who chatters away next to you the whole time
   chatty: {
     proactive: true,
     proactiveCooldownMs: 12_000,
@@ -36,29 +36,29 @@ export interface AriaConfig {
   apiKey: string
   model: string
   voice: string
-  /** 屏幕截图轮询间隔 (ms) */
+  /** Screen capture polling interval (ms) */
   captureIntervalMs: number
-  /** 画面变化多大才发送截图（0~1，帧间平均像素差比例） */
+  /** How much the screen must change before a screenshot is sent (0~1, average per-pixel diff ratio between frames) */
   diffThreshold: number
-  /** 两张发送给模型的截图之间的最小间隔 (ms) */
+  /** Minimum gap between two screenshots sent to the model (ms) */
   minImageGapMs: number
-  /** 会话里最多保留几张截图，旧的自动删除以省 token */
+  /** Max screenshots kept in the session; older ones are auto-deleted to save tokens */
   maxImagesKept: number
-  /** Aria 是否会主动开口吐槽画面 */
+  /** Whether Aria proactively comments on the screen */
   proactive: boolean
-  /** 主动程度预设，UI 用；改它会同时改写下面三个数值 */
+  /** Proactivity preset, used by the UI; changing it also rewrites the three values below */
   proactivity: ProactivityLevel
-  /** 主动吐槽的冷却时间 (ms) */
+  /** Cooldown between proactive comments (ms) */
   proactiveCooldownMs: number
-  /** 触发主动吐槽需要的画面变化幅度（0~1，应大于 diffThreshold） */
+  /** Screen-change magnitude needed to trigger a proactive comment (0~1, should be greater than diffThreshold) */
   proactiveDiffThreshold: number
   /**
-   * 安静多久之后她会看着屏幕主动找话说 (ms)；0 = 关闭。
-   * 和"画面剧变吐槽"是两条路：那条靠画面变化触发，这条靠沉默触发。
+   * How long the quiet must last before she looks at the screen and starts a conversation herself (ms); 0 = off.
+   * Separate path from the "big screen change" comments: that one is triggered by screen changes, this one by silence.
    */
   idleInitiativeMs: number
   alwaysOnTop: boolean
-  /** 圆环下方是否显示 Aria 说话的字幕 */
+  /** Whether to show captions of Aria's speech below the ring */
   showCaptions: boolean
 }
 
@@ -70,7 +70,7 @@ export const DEFAULT_CONFIG: AriaConfig = {
   diffThreshold: 0.06,
   minImageGapMs: 4000,
   maxImagesKept: 4,
-  // 默认就让她主动搭话；嫌吵在设置里调成 quiet
+  // Let her start conversations by default; if that is too noisy, switch to quiet in settings
   proactivity: 'balanced',
   ...PROACTIVITY_PRESETS.balanced,
   alwaysOnTop: true,
@@ -88,10 +88,10 @@ export function loadConfig(): AriaConfig {
     saved = JSON.parse(fs.readFileSync(configPath(), 'utf8'))
     cfg = { ...cfg, ...saved }
   } catch {
-    // 首次运行没有配置文件，用默认值
+    // No config file on first run; use defaults
   }
-  // 旧配置文件只有 proactive 布尔值，没有 proactivity 档位：按布尔值推一个档位出来，
-  // 不然会出现 proactivity='balanced' 但 proactive=false 这种自相矛盾的状态
+  // Old config files only have the proactive boolean, no proactivity level: infer a level from the boolean,
+  // otherwise we would end up with self-contradictory states like proactivity='balanced' but proactive=false
   if (!saved.proactivity) {
     const level: ProactivityLevel = saved.proactive === false ? 'quiet' : 'balanced'
     cfg = { ...cfg, proactivity: level, ...PROACTIVITY_PRESETS[level] }
