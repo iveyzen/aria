@@ -15,7 +15,13 @@ let win: BrowserWindow | null = null
 let client: RealtimeClient | null = null
 let cfg: AriaConfig
 let copilot: Copilot
-const stm = new ShortTermMemory((type, data) => copilot?.record(type, data))
+const stm = new ShortTermMemory((type, data) => {
+  copilot?.record(type, data)
+  // Fresh screen text doubles as an ASR vocabulary hint: the names they'll say are the names they see
+  if ((type === 'screen_text' || type === 'screen_ocr') && typeof data.text === 'string') {
+    client?.setTranscriptionHint(data.text)
+  }
+})
 const watcher = new ScreenWatcher()
 
 let watchEnabled = true

@@ -162,7 +162,7 @@ export class ShortTermMemory {
    * The last few screens as verbatim text, for the recall_screen tool — her own context only
    * keeps a handful of images, so "what did that post say again" needs this paper trail.
    */
-  recentScreens(n = 8): string {
+  recentScreens(n = 15): string {
     const screens = this.events.filter(ev => ev.kind === 'screen').slice(-n)
     if (!screens.length) return 'No screen text recorded yet.'
     return screens.map(ev => this.line(ev)).join('\n')

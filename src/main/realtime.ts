@@ -207,6 +207,47 @@ export class RealtimeClient extends EventEmitter {
     return oneOffInstructions(this.instructionsText(), prompt)
   }
 
+  /** The full audio config; always sent whole, because session.update may not deep-merge nested objects */
+  private audioConfig(transcriptionHint?: string): Record<string, unknown> {
+    return {
+      input: {
+        format: { type: 'audio/pcm', rate: 24000 },
+        transcription: {
+          model: 'gpt-4o-transcribe',
+          // Recent on-screen text biases recognition toward the names actually in front of them —
+          // without it, ASR turns 王虹 into 网红 and 期权 into 气喘
+          ...(transcriptionHint ? { prompt: transcriptionHint } : {})
+        },
+        turn_detection: {
+          type: 'semantic_vad',
+          // low: wait an extra beat before responding, fewer false triggers with game/background audio around
+          eagerness: 'low',
+          create_response: true,
+          interrupt_response: true
+        }
+      },
+      output: {
+        format: { type: 'audio/pcm', rate: 24000 },
+        voice: this.cfg.voice
+      }
+    }
+  }
+
+  /** What the ASR was last biased with; skip redundant session.updates */
+  private lastHint = ''
+
+  /** Feed the latest screen text to speech recognition as vocabulary context */
+  setTranscriptionHint(hint: string): void {
+    if (!this.isOpen) return
+    const clean = hint.replace(/\s+/g, ' ').trim().slice(0, 200)
+    if (!clean || clean === this.lastHint) return
+    this.lastHint = clean
+    this.send({
+      type: 'session.update',
+      session: { type: 'realtime', audio: this.audioConfig(clean) }
+    })
+  }
+
   private configureSession(): void {
     this.send({
       type: 'session.update',
@@ -216,23 +257,7 @@ export class RealtimeClient extends EventEmitter {
         tools: ARIA_TOOLS,
         tool_choice: 'auto',
         output_modalities: ['audio'],
-        audio: {
-          input: {
-            format: { type: 'audio/pcm', rate: 24000 },
-            transcription: { model: 'gpt-4o-transcribe' },
-            turn_detection: {
-              type: 'semantic_vad',
-              // low: wait an extra beat before responding, fewer false triggers with game/background audio around
-              eagerness: 'low',
-              create_response: true,
-              interrupt_response: true
-            }
-          },
-          output: {
-            format: { type: 'audio/pcm', rate: 24000 },
-            voice: this.cfg.voice
-          }
-        }
+        audio: this.audioConfig()
       }
     })
   }
