@@ -164,6 +164,14 @@ function applyChattiness(direction: 'less' | 'more'): string {
 /** Copilot mode: commands appended to copilot/inbox.jsonl land here */
 function handleCopilotCommand(c: CopilotCommand): void {
   switch (c.cmd) {
+    case 'connect':
+      // Remote-driven test sessions: the copilot stands in for the user entirely,
+      // so it must be able to bring her online without a click on the orb
+      connect()
+      break
+    case 'disconnect':
+      client?.close()
+      break
     case 'say':
       if (c.text && client?.isOpen) {
         lastActivityAt = Date.now()
