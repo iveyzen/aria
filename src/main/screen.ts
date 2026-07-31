@@ -1,8 +1,10 @@
 import { desktopCapturer, screen as electronScreen, NativeImage } from 'electron'
 
 export interface Frame {
-  /** JPEG dataURL, longest side 1024px */
+  /** JPEG dataURL, longest side 1536px — what the model sees */
   dataUrl: string
+  /** Higher-resolution JPEG dataURL for screen-text reading, only when requested — small text needs the pixels */
+  ocrDataUrl?: string
   /** Difference from the previous frame, 0–1 (1 for the first frame) */
   diff: number
   capturedAt: number
@@ -64,15 +66,25 @@ export class ScreenWatcher {
   }
 
   /** Capture one frame; returns null if the previous capture is still in flight */
-  async captureNow(): Promise<Frame | null> {
+  async captureNow(withOcrImage = false): Promise<Frame | null> {
     if (this.capturing) return null
     this.capturing = true
     try {
       const kind = this.target?.kind ?? 'screen'
+      // 1536px is needed to make out small in-game text, health bars and minimaps.
+      // When this frame will also be OCR'd, capture at native resolution instead and
+      // downscale for the model afterwards — OCR falls apart on downscaled UI text.
+      let box = 1536
+      if (withOcrImage) {
+        const d = electronScreen.getPrimaryDisplay()
+        box = Math.min(
+          2048, // enough for small UI text; native 4K PNGs would just bloat every reading call
+          Math.max(1536, Math.ceil(Math.max(d.size.width, d.size.height) * d.scaleFactor))
+        )
+      }
       const sources = await desktopCapturer.getSources({
         types: [kind],
-        // 1536px is needed to make out small in-game text, health bars and minimaps
-        thumbnailSize: { width: 1536, height: 1536 }
+        thumbnailSize: { width: box, height: box }
       })
       if (!sources.length) return null
 
@@ -95,8 +107,19 @@ export class ScreenWatcher {
 
       const image = source.thumbnail
       if (image.isEmpty()) return null
+      let modelImage = image
+      let ocrDataUrl: string | undefined
+      if (withOcrImage) {
+        ocrDataUrl = `data:image/jpeg;base64,${image.toJPEG(85).toString('base64')}`
+        const { width, height } = image.getSize()
+        if (Math.max(width, height) > 1536) {
+          modelImage =
+            width >= height ? image.resize({ width: 1536 }) : image.resize({ height: 1536 })
+        }
+      }
       return {
-        dataUrl: `data:image/jpeg;base64,${image.toJPEG(78).toString('base64')}`,
+        dataUrl: `data:image/jpeg;base64,${modelImage.toJPEG(78).toString('base64')}`,
+        ocrDataUrl,
         diff: this.diffAgainstPrev(image),
         capturedAt: Date.now()
       }

@@ -112,7 +112,9 @@ export const ARIA_TOOLS = [
     description:
       'Search the web. Use before answering anything you are unsure about, anything time-sensitive, ' +
       'or anything with specific numbers (game patches, builds, item stats, airing schedules, news). ' +
-      'Look it up rather than guessing.',
+      'Look it up rather than guessing. CALL THIS IN COMPLETE SILENCE: output no words in the same ' +
+      'turn as the call — no "let me check", no "one sec", not a syllable. You speak only after the ' +
+      'results are back, and what you say then is just the answer, as if you had always known it.',
     parameters: {
       type: 'object',
       properties: {

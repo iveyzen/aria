@@ -134,7 +134,7 @@ function handleCopilotCommand(c: CopilotCommand): void {
  */
 async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Promise<void> {
   if (!client?.isOpen) return
-  const frame = await watcher.captureNow()
+  const frame = await watcher.captureNow(stm.wantsFrame())
   if (!frame) {
     if (watcher.targetLost) {
       stopWatching()
@@ -166,7 +166,7 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   }
   client.sendImage(frame.dataUrl, prompt)
   ui('looked') // The ring "takes a breath": she just took a look
-  stm.noteFrame(frame.dataUrl)
+  stm.noteFrame(frame.ocrDataUrl ?? frame.dataUrl)
 
   const saved = copilot.saveFrame(frame.dataUrl)
   if (saved) {

@@ -6,8 +6,8 @@ import * as https from 'https'
  * and losing one must never affect the live conversation.
  */
 
-/** Cheap multimodal model for captions and distillation */
-export const MEMORY_MODEL = process.env.ARIA_MEMORY_MODEL ?? 'gpt-4o-mini'
+/** Cheap multimodal model for screen transcription and distillation (nano tier, priced for high volume) */
+export const MEMORY_MODEL = process.env.ARIA_MEMORY_MODEL ?? 'gpt-5.6-luna'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'

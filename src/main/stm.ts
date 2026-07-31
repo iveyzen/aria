@@ -30,10 +30,12 @@ const SCREEN_TEXT_GAP_MS = 10_000 // OCR is local and free; this just keeps STM 
 const SCREEN_TEXT_MAX = 900 // a full page of tweets is a lot of line; cap what one frame may occupy
 const SAVE_DEBOUNCE_MS = 2_000
 
-const CAPTION_PROMPT =
-  'You are the eyes of a companion AI watching a friend\'s screen. In one or two short lines: ' +
-  'what app or game is this, and what is happening right now? Include important visible text ' +
-  'verbatim (titles, names, numbers, errors). Telegraphic style, no commentary, no speculation.'
+const TRANSCRIBE_PROMPT =
+  'You are the eyes of a companion AI watching a friend\'s screen. Transcribe the readable ' +
+  'content of this screen verbatim, in reading order, as compact plain text. Keep names, handles, ' +
+  'numbers and titles exactly as written. Skip window chrome, menus, icons and ads. If there is ' +
+  'little or no text (a game scene, a video), instead say in one or two telegraphic lines what app ' +
+  'or game this is and what is happening. No commentary, no speculation.'
 
 export class ShortTermMemory {
   private events: StmEvent[] = []
@@ -97,6 +99,11 @@ export class ShortTermMemory {
     this.scheduleSave()
   }
 
+  /** Whether the next frame would be turned into screen text (lets the capturer skip full-res work otherwise) */
+  wantsFrame(): boolean {
+    return Date.now() - this.lastCaptionAt >= SCREEN_TEXT_GAP_MS
+  }
+
   /**
    * A frame was just sent to Aria: turn it into a text memory too (throttled).
    * Verbatim first — Windows OCR reads rendered text word for word, which beats any summary
@@ -114,28 +121,37 @@ export class ShortTermMemory {
   private lastScreenText = ''
 
   private async frameToText(dataUrl: string, t: number): Promise<void> {
-    let text = (await ocrImage(dataUrl)).replace(/\s+/g, ' ').trim()
-    let source = 'screen_ocr'
-    if (text.length < 30 && this.apiKey) {
-      source = 'caption'
+    // Primary: a nano vision model transcribing verbatim — it keeps reading order, skips icon
+    // chrome, and handles mixed CJK/latin where raw OCR falls apart
+    let text = ''
+    let source = 'screen_text'
+    if (this.apiKey) {
       try {
         text = (
           await chatText(this.apiKey, MEMORY_MODEL, [
             {
               role: 'user',
               content: [
-                { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
-                { type: 'text', text: CAPTION_PROMPT }
+                { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+                { type: 'text', text: TRANSCRIBE_PROMPT }
               ]
             }
           ])
         ).trim()
       } catch (err) {
-        this.log('caption_error', { error: String((err as Error)?.message ?? err) })
-        return
+        this.log('screen_text_error', { error: String((err as Error)?.message ?? err) })
       }
     }
-    text = text.slice(0, SCREEN_TEXT_MAX)
+    if (!text) {
+      // No key or the call failed: the free local OCR still beats remembering nothing.
+      // Windows OCR spaces CJK glyph by glyph ("很 大 的 橙 子"); merge those gaps back into words.
+      source = 'screen_ocr'
+      text = (await ocrImage(dataUrl))
+        .replace(/\s+/g, ' ')
+        .replace(/(?<=[　-鿿＀-￯])\s+(?=[　-鿿＀-￯])/g, '')
+        .trim()
+    }
+    text = text.replace(/\s+/g, ' ').slice(0, SCREEN_TEXT_MAX)
     if (!text || text === this.lastScreenText) return // an unchanged screen isn't a new memory
     this.lastScreenText = text
     this.add('screen', text, t)
