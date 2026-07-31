@@ -1,13 +1,7 @@
 import { EventEmitter } from 'events'
 import WebSocket from 'ws'
 import { AriaConfig } from './config'
-import {
-  ARIA_INSTRUCTIONS,
-  ARIA_TOOLS,
-  GREETING_PROMPT,
-  INITIATIVE_PROMPT,
-  speakJudged
-} from './persona'
+import { ARIA_INSTRUCTIONS, ARIA_TOOLS, GREETING_PROMPT, speakJudged } from './persona'
 
 /**
  * WebSocket client for gpt-realtime-2.1.
@@ -33,6 +27,8 @@ export class RealtimeClient extends EventEmitter {
   private greeted = false
   /** Whether we are waiting on the result of a silent "should I speak" judgment */
   private pendingJudge = false
+  /** Which judgment is in flight ('initiative' | 'proactive'), echoed back in the judged event */
+  private pendingJudgeKind = 'initiative'
   /** Copilot persona override; null = the built-in ARIA_INSTRUCTIONS */
   private personaOverride: string | null = null
 
@@ -89,16 +85,17 @@ export class RealtimeClient extends EventEmitter {
   }
 
   /**
-   * Idle initiative: after a stretch of quiet, have her look at the latest screenshot and silently judge whether to speak.
-   * The judgment is text-only (cheap, makes no sound); PASS output means act as if nothing happened,
+   * Silently judge whether to speak (idle initiative, big screen changes). The judgment is
+   * text-only (cheap, makes no sound); PASS output means act as if nothing happened,
    * a written line then gets actually spoken aloud.
    */
-  requestInitiative(): void {
+  requestJudgment(prompt: string, kind = 'initiative'): void {
     if (!this.isOpen || this.responseActive || this.userSpeaking || this.pendingJudge) return
     this.pendingJudge = true
+    this.pendingJudgeKind = kind
     this.send({
       type: 'response.create',
-      response: { output_modalities: ['text'], instructions: this.oneOff(INITIATIVE_PROMPT) }
+      response: { output_modalities: ['text'], instructions: this.oneOff(prompt) }
     })
   }
 
@@ -304,7 +301,7 @@ export class RealtimeClient extends EventEmitter {
           this.pendingJudge = false
           const line = this.extractText(ev.response)
           const spoke = Boolean(line && !/^pass\b/i.test(line) && !this.userSpeaking)
-          this.emit('judged', { line, spoke })
+          this.emit('judged', { line, spoke, kind: this.pendingJudgeKind })
           // She decided to speak: actually say that line out loud; on PASS do nothing
           if (spoke) {
             this.send({

@@ -3,7 +3,7 @@ import * as path from 'path'
 import { AriaConfig, PROACTIVITY_PRESETS, loadConfig, saveConfig } from './config'
 import { Copilot, CopilotCommand } from './copilot'
 import { addFact, memoryContext } from './memory'
-import { PROACTIVE_PROMPT, sessionContext } from './persona'
+import { INITIATIVE_PROMPT, PROACTIVE_PROMPT, sessionContext } from './persona'
 import { RealtimeClient } from './realtime'
 import { CaptureTarget, ScreenWatcher } from './screen'
 import { ShortTermMemory } from './stm'
@@ -25,6 +25,8 @@ let lastImageAt = 0
 let lastProactiveAt = 0
 /** Timestamp of the last "someone spoke" moment (user spoke up or Aria finished); idle initiative timing is based on this */
 let lastActivityAt = 0
+/** Self-started lines since the user last said anything — she backs off instead of monologuing */
+let unansweredInitiatives = 0
 
 /** How often to check "is it time to strike up a conversation" */
 const INITIATIVE_TICK_MS = 5_000
@@ -82,7 +84,9 @@ async function maybeStartSomething(): Promise<void> {
   if (client.isResponding || client.isUserSpeaking) return
 
   const now = Date.now()
-  if (now - lastActivityAt < cfg.idleInitiativeMs) return
+  // Unanswered self-started lines stretch the wait: a friend who got no reply twice stops pushing
+  const idleNeeded = cfg.idleInitiativeMs * Math.min(4, 1 + unansweredInitiatives)
+  if (now - lastActivityAt < idleNeeded) return
   if (now - lastProactiveAt < cfg.proactiveCooldownMs) return
 
   // Send a fresh screenshot first so she knows what is on the screen right now
@@ -92,7 +96,7 @@ async function maybeStartSomething(): Promise<void> {
   lastProactiveAt = now
   lastActivityAt = now // Restart the timer whether or not she speaks, to avoid judging on every tick
   copilot.record('initiative_check')
-  client.requestInitiative()
+  client.requestJudgment(INITIATIVE_PROMPT)
 }
 
 /** Copilot mode: commands appended to copilot/inbox.jsonl land here */
@@ -152,21 +156,24 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
   if (!gapOk || (!forced && !changed)) return
   lastImageAt = now
 
-  let prompt = respondPrompt
-  if (
-    !prompt &&
+  const wantProactive =
+    !respondPrompt &&
     cfg.proactive &&
     frame.diff >= cfg.proactiveDiffThreshold &&
-    now - lastProactiveAt >= cfg.proactiveCooldownMs &&
+    // Unanswered self-started lines stretch the cooldown too — same back-off as idle initiative
+    now - lastProactiveAt >= cfg.proactiveCooldownMs * Math.min(4, 1 + unansweredInitiatives) &&
     !client.isResponding &&
     !client.isUserSpeaking
-  ) {
-    lastProactiveAt = now
-    prompt = PROACTIVE_PROMPT
-  }
-  client.sendImage(frame.dataUrl, prompt)
+
+  client.sendImage(frame.dataUrl, respondPrompt)
   ui('looked') // The ring "takes a breath": she just took a look
   stm.noteFrame(frame.ocrDataUrl ?? frame.dataUrl)
+
+  // Big change: judged, not spoken directly — app switches must be able to PASS silently
+  if (wantProactive) {
+    lastProactiveAt = now
+    client.requestJudgment(PROACTIVE_PROMPT, 'proactive')
+  }
 
   const saved = copilot.saveFrame(frame.dataUrl)
   if (saved) {
@@ -244,6 +251,7 @@ function connect(): void {
   })
   client.on('userTranscript', (t: string) => {
     lastActivityAt = Date.now()
+    unansweredInitiatives = 0 // they're talking again; she can stop holding back
     copilot.record('user_text', { text: t })
     stm.add('user', t)
     ui('user-said', t)
@@ -256,9 +264,13 @@ function connect(): void {
     flushAriaLine(false)
     ui('aria-done')
   })
-  client.on('judged', ({ line, spoke }: { line: string; spoke: boolean }) => {
-    copilot.record('initiative_result', { spoke, line })
-  })
+  client.on(
+    'judged',
+    ({ line, spoke, kind }: { line: string; spoke: boolean; kind?: string }) => {
+      if (spoke) unansweredInitiatives++
+      copilot.record(`${kind ?? 'initiative'}_result`, { spoke, line })
+    }
+  )
   client.on('probeResult', (text: string) => copilot.record('probe_result', { text }))
   client.on('responseState', (active: boolean) => {
     if (!active) lastActivityAt = Date.now() // She finished speaking; the silence clock restarts from this moment

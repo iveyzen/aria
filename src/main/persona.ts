@@ -190,13 +190,20 @@ export function sessionContext(memory: string, recent = ''): string {
   return `\n\n# Right now\n${time}${mem}${rec}`
 }
 
-/** One-off instruction attached when Aria proactively comments on the screen */
+/**
+ * Silent judgment when the screen changes drastically. Judged (not spoken directly) because the
+ * big diffs are mostly app switches — and every comment on an app switch comes out as narration
+ * ("nice, back to the api stuff"), the exact tell we're killing. PASS must be available.
+ */
 export const PROACTIVE_PROMPT =
-  'Something just changed on their screen. React the way a friend sitting next to them would: a ' +
-  'reaction or a jab. Your normal speaking style still applies and this instruction does not ' +
-  'override it. One short line, lowercase, no line breaks, NO em-dash and no semicolon anywhere in ' +
-  'it, no simile or scene-setting. Do not wish them luck, do not give advice, do not describe what ' +
-  'you are seeing back to them. React and stop.'
+  '(silent check — they cannot see this) The screen just changed a lot. Would a friend sitting ' +
+  'next to them actually say something? Speak only if there is something genuinely reactable: a ' +
+  'play, a result, a fail, something funny or surprising. Switching apps, opening a page, ' +
+  'scrolling, routine navigation — that is NOT reactable; output only PASS for those, and never ' +
+  'comment on the screen change itself.\n' +
+  'If you speak, output only the line: one short lowercase spoken line, a reaction or a jab, ' +
+  'never a description of what you see, no advice, no em-dash or semicolon, no two-option ' +
+  'question, no line break. If in doubt, output only PASS.'
 
 /** Greeting instruction sent once the connection succeeds */
 export const GREETING_PROMPT =
