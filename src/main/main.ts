@@ -15,13 +15,26 @@ let win: BrowserWindow | null = null
 let client: RealtimeClient | null = null
 let cfg: AriaConfig
 let copilot: Copilot
+/** What the ASR is currently biased with; used to catch the hint bleeding back out as fake speech */
+let lastHintText = ''
 const stm = new ShortTermMemory((type, data) => {
   copilot?.record(type, data)
   // Fresh screen text doubles as an ASR vocabulary hint: the names they'll say are the names they see
   if ((type === 'screen_text' || type === 'screen_ocr') && typeof data.text === 'string') {
+    lastHintText = data.text.replace(/\s+/g, '')
     client?.setTranscriptionHint(data.text)
   }
 })
+
+/**
+ * Whisper-family models hallucinate their prompt as "speech" over background noise — with the
+ * screen-text bias that surfaces as the user "saying" a whole page of their feed. A long
+ * transcript that is a verbatim chunk of the current hint is an echo, not the user.
+ */
+function isHintEcho(transcript: string): boolean {
+  const t = transcript.replace(/\s+/g, '')
+  return t.length > 30 && lastHintText.includes(t.slice(0, 60))
+}
 const watcher = new ScreenWatcher()
 
 let watchEnabled = true
@@ -193,6 +206,8 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
     frame.diff >= cfg.proactiveDiffThreshold &&
     // Unanswered self-started lines stretch the cooldown too — same back-off as idle initiative
     now - lastProactiveAt >= cfg.proactiveCooldownMs * Math.min(4, 1 + unansweredInitiatives) &&
+    // A beat of actual quiet first: judging right after her own reply duplicated the reply
+    now - lastActivityAt >= 8_000 &&
     !client.isResponding &&
     !client.isUserSpeaking
 
@@ -275,6 +290,10 @@ function connect(): void {
     stm.add('aria', interrupted ? `${text} (got cut off)` : text)
   })
   client.on('userTranscript', (t: string) => {
+    if (isHintEcho(t)) {
+      copilot.record('asr_echo_dropped', { text: t.slice(0, 120) })
+      return
+    }
     lastActivityAt = Date.now()
     unansweredInitiatives = 0 // they're talking again; she can stop holding back
     copilot.record('user_text', { text: t })

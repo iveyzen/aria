@@ -205,6 +205,8 @@ export class ShortTermMemory {
     if (this.distilling || !this.apiKey) return
     this.distilling = true
     const batch = this.pending.splice(0, nLines)
+    // Full batch into the copilot log (no-op otherwise): auditing the distiller means seeing its input
+    this.log('distill_batch', { lines: batch })
     try {
       const res = await distill(batch, this.apiKey)
       this.log('distilled', { lines: batch.length, ...res })
