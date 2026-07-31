@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { MEMORY_MODEL, chatText } from './llm'
 import { distill } from './memory'
+import { ocrImage } from './ocr'
 
 /**
  * Short-term memory: a fixed-length queue of everything that just happened, as plain text —
@@ -25,7 +26,8 @@ export interface StmEvent {
 const STM_MAX = 150 // queue length — roughly an hour of lively session
 const DISTILL_BATCH = 40 // evicted lines per distillation call
 const FLUSH_MIN = 8 // don't distill scraps smaller than this on disconnect; they persist to next time
-const CAPTION_GAP_MS = 20_000 // frames flow faster than memory needs; caption at most this often
+const SCREEN_TEXT_GAP_MS = 10_000 // OCR is local and free; this just keeps STM from drowning in near-duplicates
+const SCREEN_TEXT_MAX = 900 // a full page of tweets is a lot of line; cap what one frame may occupy
 const SAVE_DEBOUNCE_MS = 2_000
 
 const CAPTION_PROMPT =
@@ -97,30 +99,47 @@ export class ShortTermMemory {
 
   /**
    * A frame was just sent to Aria: turn it into a text memory too (throttled).
-   * Fire-and-forget — the caption lands in the queue seconds later, stamped with capture time.
+   * Verbatim first — Windows OCR reads rendered text word for word, which beats any summary
+   * (a summarized tweet loses exactly the names and numbers she later gets asked about).
+   * Only text-poor scenes (games, video) fall back to a vision caption.
+   * Fire-and-forget — the text lands in the queue seconds later, stamped with capture time.
    */
   noteFrame(dataUrl: string): void {
-    if (!this.apiKey) return
     const now = Date.now()
-    if (now - this.lastCaptionAt < CAPTION_GAP_MS) return
+    if (now - this.lastCaptionAt < SCREEN_TEXT_GAP_MS) return
     this.lastCaptionAt = now
-    chatText(this.apiKey, MEMORY_MODEL, [
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
-          { type: 'text', text: CAPTION_PROMPT }
-        ]
+    void this.frameToText(dataUrl, now)
+  }
+
+  private lastScreenText = ''
+
+  private async frameToText(dataUrl: string, t: number): Promise<void> {
+    let text = (await ocrImage(dataUrl)).replace(/\s+/g, ' ').trim()
+    let source = 'screen_ocr'
+    if (text.length < 30 && this.apiKey) {
+      source = 'caption'
+      try {
+        text = (
+          await chatText(this.apiKey, MEMORY_MODEL, [
+            {
+              role: 'user',
+              content: [
+                { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+                { type: 'text', text: CAPTION_PROMPT }
+              ]
+            }
+          ])
+        ).trim()
+      } catch (err) {
+        this.log('caption_error', { error: String((err as Error)?.message ?? err) })
+        return
       }
-    ])
-      .then(text => {
-        const caption = text.trim()
-        if (caption) {
-          this.add('screen', caption, now)
-          this.log('caption', { text: caption })
-        }
-      })
-      .catch(err => this.log('caption_error', { error: String((err as Error)?.message ?? err) }))
+    }
+    text = text.slice(0, SCREEN_TEXT_MAX)
+    if (!text || text === this.lastScreenText) return // an unchanged screen isn't a new memory
+    this.lastScreenText = text
+    this.add('screen', text, t)
+    this.log(source, { text })
   }
 
   /**

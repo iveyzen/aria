@@ -98,7 +98,7 @@ export class RealtimeClient extends EventEmitter {
     this.pendingJudge = true
     this.send({
       type: 'response.create',
-      response: { output_modalities: ['text'], instructions: INITIATIVE_PROMPT }
+      response: { output_modalities: ['text'], instructions: this.oneOff(INITIATIVE_PROMPT) }
     })
   }
 
@@ -169,7 +169,7 @@ export class RealtimeClient extends EventEmitter {
       }
     })
     if (respondPrompt && !this.responseActive && !this.userSpeaking) {
-      this.send({ type: 'response.create', response: { instructions: respondPrompt } })
+      this.send({ type: 'response.create', response: { instructions: this.oneOff(respondPrompt) } })
     }
   }
 
@@ -179,6 +179,16 @@ export class RealtimeClient extends EventEmitter {
 
   private instructionsText(): string {
     return (this.personaOverride ?? ARIA_INSTRUCTIONS) + this.extraContext
+  }
+
+  /**
+   * Wrap a one-off prompt for response.create. Per-response instructions REPLACE the session
+   * instructions rather than adding to them, so without this prefix the greeting, proactive
+   * comments, initiative judgments and spoken judged lines would all run with no persona at all —
+   * which is exactly where off-style replies (narration, menus, language drift) were coming from.
+   */
+  private oneOff(prompt: string): string {
+    return `${this.instructionsText()}\n\n# Right now, specifically\n${prompt}`
   }
 
   private configureSession(): void {
@@ -227,7 +237,7 @@ export class RealtimeClient extends EventEmitter {
         if (!this.greeted) {
           this.greeted = true
           this.emit('status', 'Aria is online')
-          this.send({ type: 'response.create', response: { instructions: GREETING_PROMPT } })
+          this.send({ type: 'response.create', response: { instructions: this.oneOff(GREETING_PROMPT) } })
         }
         break
 
@@ -297,7 +307,10 @@ export class RealtimeClient extends EventEmitter {
           this.emit('judged', { line, spoke })
           // She decided to speak: actually say that line out loud; on PASS do nothing
           if (spoke) {
-            this.send({ type: 'response.create', response: { instructions: speakJudged(line) } })
+            this.send({
+              type: 'response.create',
+              response: { instructions: this.oneOff(speakJudged(line)) }
+            })
           }
         }
         break
