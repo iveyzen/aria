@@ -21,7 +21,17 @@ function fetchHtml(url: string, redirects = 3): Promise<string> {
           return
         }
         const chunks: Buffer[] = []
-        res.on('data', c => chunks.push(c))
+        let size = 0
+        res.on('data', c => {
+          size += c.length
+          if (size > 512 * 1024) {
+            // A results page is ~50KB; anything bigger is not what we asked for
+            req.destroy()
+            resolve(Buffer.concat(chunks).toString('utf8'))
+            return
+          }
+          chunks.push(c)
+        })
         res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
       }
     )
@@ -43,17 +53,29 @@ function strip(html: string): string {
     .trim()
 }
 
+/** DDG links point through /l/?uddg=<encoded real url>; unwrap for a traceable source */
+function realUrl(href: string): string {
+  try {
+    const u = new URL(href, 'https://duckduckgo.com')
+    const uddg = u.searchParams.get('uddg')
+    return uddg ? decodeURIComponent(uddg) : u.toString()
+  } catch {
+    return ''
+  }
+}
+
 export async function searchWeb(query: string): Promise<string> {
   try {
     const html = await fetchHtml(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`)
     const results: string[] = []
     const re =
-      /class="result__a"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g
+      /class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g
     let m: RegExpExecArray | null
     while ((m = re.exec(html)) && results.length < 5) {
-      const title = strip(m[1])
-      const snippet = strip(m[2])
-      if (title) results.push(`${results.length + 1}. ${title} — ${snippet}`)
+      const title = strip(m[2])
+      const snippet = strip(m[3])
+      const url = realUrl(m[1])
+      if (title) results.push(`${results.length + 1}. ${title} — ${snippet}${url ? ` (${url})` : ''}`)
     }
     return results.length ? results.join('\n') : 'No results found'
   } catch (err) {

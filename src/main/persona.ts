@@ -159,6 +159,16 @@ export const ARIA_TOOLS = [
   }
 ]
 
+/**
+ * Compose a one-off response.create instruction. Per-response instructions REPLACE the session
+ * instructions, so every one-shot prompt must carry the full persona itself. Production
+ * (realtime.ts) and the eval harness (ariaClient.ts) must both use this — if they compose
+ * differently, eval scores stop meaning anything about the shipped behavior.
+ */
+export function oneOffInstructions(sessionInstructions: string, prompt: string): string {
+  return `${sessionInstructions}\n\n# Right now, specifically\n${prompt}`
+}
+
 /** Dynamic context injected on every connect: the current time + long-term memory + what just happened */
 export function sessionContext(memory: string, recent = ''): string {
   const now = new Date()

@@ -1,7 +1,13 @@
 import { EventEmitter } from 'events'
 import WebSocket from 'ws'
 import { AriaConfig } from './config'
-import { ARIA_INSTRUCTIONS, ARIA_TOOLS, GREETING_PROMPT, speakJudged } from './persona'
+import {
+  ARIA_INSTRUCTIONS,
+  ARIA_TOOLS,
+  GREETING_PROMPT,
+  oneOffInstructions,
+  speakJudged
+} from './persona'
 
 /**
  * WebSocket client for gpt-realtime-2.1.
@@ -185,7 +191,7 @@ export class RealtimeClient extends EventEmitter {
    * which is exactly where off-style replies (narration, menus, language drift) were coming from.
    */
   private oneOff(prompt: string): string {
-    return `${this.instructionsText()}\n\n# Right now, specifically\n${prompt}`
+    return oneOffInstructions(this.instructionsText(), prompt)
   }
 
   private configureSession(): void {

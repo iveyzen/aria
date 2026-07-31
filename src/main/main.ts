@@ -187,7 +187,9 @@ async function captureAndMaybeSend(forced: boolean, respondPrompt?: string): Pro
 }
 
 function connect(): void {
-  if (client?.isOpen) return
+  // A non-null client is open OR still connecting — either way a second connect() would
+  // create a duplicate with doubled event handlers. The close handler nulls it on any exit.
+  if (client) return
   cfg = loadConfig()
   if (!cfg.apiKey) {
     ui('status', 'Add your OpenAI API key in settings first')

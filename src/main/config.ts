@@ -9,12 +9,12 @@ export const PROACTIVITY_PRESETS: Record<
   ProactivityLevel,
   Pick<AriaConfig, 'proactive' | 'proactiveCooldownMs' | 'proactiveDiffThreshold' | 'idleInitiativeMs'>
 > = {
-  // Basically only speaks when spoken to
+  // The UI promises "Only speaks when you talk" — so quiet really is reactive-only
   quiet: {
-    proactive: true,
+    proactive: false,
     proactiveCooldownMs: 90_000,
-    proactiveDiffThreshold: 0.2,
-    idleInitiativeMs: 120_000
+    proactiveDiffThreshold: 1,
+    idleInitiativeMs: 0
   },
   // Default level: comments when something happens on screen, and finds something to say after half a minute of quiet
   balanced: {

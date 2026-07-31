@@ -1,5 +1,5 @@
 import WebSocket from 'ws'
-import { ARIA_INSTRUCTIONS, ARIA_TOOLS, sessionContext } from '../main/persona'
+import { ARIA_INSTRUCTIONS, ARIA_TOOLS, oneOffInstructions, sessionContext } from '../main/persona'
 import { searchWeb } from '../main/websearch'
 import { ToolCall } from './types'
 
@@ -25,6 +25,7 @@ export class EvalAriaClient {
   private waiter: ((r: ResponseResult) => void) | null = null
   private failWaiter: ((e: Error) => void) | null = null
   private imageItemIds: string[] = []
+  private sessionInstructions = ''
 
   constructor(
     private readonly apiKey: string,
@@ -58,11 +59,12 @@ export class EvalAriaClient {
     })
 
     // Same as production: real persona + time/memory context, only output switched to text
+    this.sessionInstructions = ARIA_INSTRUCTIONS + sessionContext(this.memory)
     this.send({
       type: 'session.update',
       session: {
         type: 'realtime',
-        instructions: ARIA_INSTRUCTIONS + sessionContext(this.memory),
+        instructions: this.sessionInstructions,
         tools: ARIA_TOOLS,
         tool_choice: 'auto',
         output_modalities: ['text']
@@ -97,6 +99,9 @@ export class EvalAriaClient {
    * in production (PROACTIVE_PROMPT / INITIATIVE_PROMPT); omit it for a normal
    * conversation turn. If she calls a tool midway, it is actually executed here
    * and she continues speaking, matching production behavior.
+   * One-shot prompts get the same oneOffInstructions() persona wrapping as production —
+   * response.create instructions REPLACE session instructions, so bare prompts would
+   * eval a persona-less Aria that never ships.
    */
   async respond(instructions?: string): Promise<{ text: string; toolCalls: ToolCall[] }> {
     const toolCalls: ToolCall[] = []
@@ -104,7 +109,9 @@ export class EvalAriaClient {
 
     this.send({
       type: 'response.create',
-      response: instructions ? { instructions } : {}
+      response: instructions
+        ? { instructions: oneOffInstructions(this.sessionInstructions, instructions) }
+        : {}
     })
 
     // Allow at most 4 "call tool → keep talking" round trips to guard against infinite loops
